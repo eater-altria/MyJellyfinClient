@@ -1,0 +1,22 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+.npm-cache/
+.toolchain/
+.acl-recovery/
+.tmp/
+.local/
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.key
+*.tsbuildinfo
+*.log
+# mpv binaries are downloaded, not committed
+src-tauri/resources/mpv/*.exe
+src-tauri/resources/mpv/*.com
+src-tauri/resources/mpv/*.dll
+src-tauri/resources/mpv/portable_config/cache/
