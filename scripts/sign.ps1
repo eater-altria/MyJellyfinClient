@@ -3,6 +3,10 @@
 param([string[]]$Paths)
 
 $ErrorActionPreference = 'Stop'
+# Node/Tauri can inherit a PowerShell 7 module path while launching Windows
+# PowerShell 5.1. Load this host's own security module to register Cert: and
+# the Authenticode commands before accessing the existing certificate store.
+Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1')
 $root = Split-Path -Parent $PSScriptRoot
 
 $cert = Get-ChildItem Cert:\CurrentUser\My |
