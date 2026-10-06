@@ -277,8 +277,8 @@ export class MediaServerApi {
   }
 
   // ---------- Libraries / views ----------
-  getUserViews(): Promise<ItemsResult> {
-    return this.get(`/Users/${this.userId}/Views`, { IncludeHidden: false, Fields: LIST_ITEM_FIELDS });
+  getUserViews(signal?: AbortSignal): Promise<ItemsResult> {
+    return this.get(`/Users/${this.userId}/Views`, { IncludeHidden: false, Fields: LIST_ITEM_FIELDS }, signal);
   }
 
   getLatest(parentId: string, limit = 16): Promise<BaseItem[]> {
@@ -290,31 +290,49 @@ export class MediaServerApi {
     });
   }
 
-  getResumeItems(limit = 12): Promise<ItemsResult> {
+  getResumeItems(limit = 12, startIndex = 0, signal?: AbortSignal): Promise<ItemsResult> {
     return this.get(`/Users/${this.userId}/Items/Resume`, {
       Limit: limit,
+      StartIndex: startIndex,
       Recursive: true,
       Fields: LIST_ITEM_FIELDS,
       MediaTypes: 'Video',
       ImageTypeLimit: 1,
-    });
+    }, signal);
   }
 
-  getNextUp(limit = 12): Promise<ItemsResult> {
+  getNextUp(limit = 12, startIndex = 0, signal?: AbortSignal): Promise<ItemsResult> {
     return this.get(`/Shows/NextUp`, {
       UserId: this.userId,
       Limit: limit,
+      StartIndex: startIndex,
       Fields: LIST_ITEM_FIELDS + ',SeriesName',
       ImageTypeLimit: 1,
-    });
+    }, signal);
   }
 
-  queryItems(params: Record<string, unknown>): Promise<ItemsResult> {
+  queryItems(params: Record<string, unknown>, signal?: AbortSignal): Promise<ItemsResult> {
     return this.get(`/Users/${this.userId}/Items`, {
       ImageTypeLimit: 1,
       ...params,
       Fields: [...new Set((LIST_ITEM_FIELDS + ',' + String(params.Fields ?? '')).split(',').filter(Boolean))].join(','),
-    });
+    }, signal);
+  }
+
+  /** Page through a view using the regular item query, which supplies a total
+   * and supports StartIndex in both protocols, including collection containers. */
+  getLibraryItems(view: BaseItem, startIndex = 0, limit = 24, signal?: AbortSignal): Promise<ItemsResult> {
+    return this.queryItems({
+      ParentId: view.Id,
+      Recursive: true,
+      IncludeItemTypes: libraryItemTypes(view),
+      SortBy: 'DateCreated,SortName',
+      SortOrder: 'Descending,Ascending',
+      GroupItemsIntoCollections: false,
+      StartIndex: startIndex,
+      Limit: limit,
+      EnableTotalRecordCount: true,
+    }, signal);
   }
 
   getItem(itemId: string, signal?: AbortSignal): Promise<BaseItem> {
@@ -588,6 +606,19 @@ export class MediaServerApi {
   personImageUrl(person: Person, maxWidth = 200): string | null {
     if (!person.PrimaryImageTag) return null;
     return this.imageUrl(person.Id, 'Primary', { tag: person.PrimaryImageTag, maxWidth });
+  }
+}
+
+export function libraryItemTypes(view: BaseItem | null | undefined): string | undefined {
+  if (view?.Type === 'BoxSet') return 'Movie,Series,Video,BoxSet';
+  switch (view?.CollectionType) {
+    case 'movies': return 'Movie';
+    case 'tvshows': return 'Series';
+    case 'boxsets': return 'BoxSet';
+    case 'mixed': return 'Movie,Series,Video,BoxSet';
+    case 'music': return 'MusicAlbum';
+    case 'photos': return 'PhotoAlbum,Photo';
+    default: return undefined;
   }
 }
 

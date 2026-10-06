@@ -173,6 +173,7 @@ async function checkLibraryQueries() {
     },
   };
   const Library = load('src/pages/Library.tsx', {
+    '../api/mediaServer': media,
     react,
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
     'react-router-dom': { useParams: () => ({ serverId: 'server', libraryId: 'library' }), useNavigate: () => () => {} },
@@ -195,6 +196,7 @@ async function checkLibraryQueries() {
     return [...(predicate(tree) ? [tree] : []), ...find(tree.props?.children, predicate)];
   };
   settings = { ...defaults };
+  render(); await flush();
   render(); await flush();
   const first = render();
   assert.equal(queries[0].SortBy, 'IsFolder,SortName');

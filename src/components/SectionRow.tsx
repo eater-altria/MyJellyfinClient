@@ -8,11 +8,13 @@ export default function SectionRow({
   count,
   children,
   onMore,
+  onLoadMore,
 }: {
   title: string;
   count?: number;
   children: React.ReactNode;
   onMore?: () => void;
+  onLoadMore?: () => void;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const showCount = useSettings((settings) => settings.showItemCountInTitle);
@@ -54,6 +56,10 @@ export default function SectionRow({
         ref={scroller}
         className="flex gap-3 overflow-x-auto pb-2 pr-1"
         style={{ scrollbarWidth: 'none' }}
+        onScroll={e => {
+          const el = e.currentTarget;
+          if (el.scrollWidth - el.scrollLeft - el.clientWidth < 180) onLoadMore?.();
+        }}
       >
         {children}
       </div>

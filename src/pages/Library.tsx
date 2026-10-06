@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { BaseItem, MediaServerApi } from '../api/mediaServer';
+import { BaseItem, MediaServerApi, libraryItemTypes } from '../api/mediaServer';
 import { useServers } from '../store/servers';
 import { useSettings } from '../store/settings';
 import { mediaFolderDate, mediaSortParams, orderMediaItems } from '../utils/listPresentation';
@@ -49,14 +49,14 @@ export default function LibraryPage() {
   const [error, setError] = useState('');
   const [retryTick, setRetryTick] = useState(0);
   const requestVersion = useRef(0);
+  const viewLibrary = useRef<string>();
 
   const includeItemTypes = useMemo(() => {
-    const ct = view?.CollectionType;
-    if (ct === 'movies') return 'Movie';
-    if (ct === 'tvshows') return 'Series';
-    if (typeFilter === 'movie') return 'Movie';
-    if (typeFilter === 'series') return 'Series';
-    return 'Movie,Series';
+    if (view?.CollectionType === 'mixed') {
+      if (typeFilter === 'movie') return 'Movie';
+      if (typeFilter === 'series') return 'Series';
+    }
+    return libraryItemTypes(view);
   }, [view, typeFilter]);
 
   const buildParams = useCallback(
@@ -75,24 +75,23 @@ export default function LibraryPage() {
     [libraryId, includeItemTypes, sortKey, foldersFirst],
   );
 
-  // Load library view info once
+  // Load the view type before choosing item filters, including BoxSet views.
   useEffect(() => {
     if (!api) return;
     let mounted = true;
-    api
-      .getItem(libraryId)
-      .then((v) => {
-        if (mounted) setView(v);
-      })
-      .catch(() => {});
-    return () => {
-      mounted = false;
-    };
-  }, [api, libraryId]);
+    viewLibrary.current = undefined;
+    setView(null); setLoading(true); setError('');
+    api.getItem(libraryId).then(v => {
+      if (mounted) { viewLibrary.current = libraryId; setView(v); }
+    }).catch(e => {
+      if (mounted) { setError(e instanceof Error ? e.message : String(e)); setLoading(false); }
+    });
+    return () => { mounted = false; };
+  }, [api, libraryId, retryTick]);
 
   // (Re)load items when api / sort / filter changes
   useEffect(() => {
-    if (!api) return;
+    if (!api || !view || viewLibrary.current !== libraryId) return;
     let mounted = true;
     ++requestVersion.current;
     setLoading(true);
@@ -117,7 +116,7 @@ export default function LibraryPage() {
       mounted = false;
       ++requestVersion.current;
     };
-  }, [api, buildParams, retryTick]);
+  }, [api, buildParams, retryTick, view, libraryId]);
 
   const loadMore = () => {
     if (!api || loadingMore) return;
@@ -155,6 +154,7 @@ export default function LibraryPage() {
 
   const detailRoute = (item: BaseItem) => {
     if (item.Type === 'Series') return `/server/${serverId}/series/${item.Id}`;
+    if (item.Type === 'BoxSet' || item.IsFolder) return `/server/${serverId}/library/${item.Id}`;
     return `/server/${serverId}/${item.Type === 'Episode' ? 'episode' : 'movie'}/${item.Id}`;
   };
 

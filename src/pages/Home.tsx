@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { BaseItem, MediaServerApi } from '../api/mediaServer';
 import { useServers } from '../store/servers';
@@ -7,7 +7,7 @@ import { mediaFolderDate, orderMediaItems } from '../utils/listPresentation';
 import SectionRow from '../components/SectionRow';
 import PosterCard from '../components/PosterCard';
 import HeroCarousel from '../components/HeroCarousel';
-import { EmptyState, Spinner } from '../components/Feedback';
+import { EmptyState, ErrorState, Spinner } from '../components/Feedback';
 import { IconServer } from '../components/icons';
 
 const COLLECTION_TYPE_CN: Record<string, string> = {
@@ -28,12 +28,22 @@ const PASTEL_GRADIENTS = [
   'from-cyan-100 to-blue-100',
 ];
 
+const PAGE_SIZE = 24; // Request size only; every category can load all its pages.
+const RESUME_VIEW: BaseItem = { Id: '@resume', Name: '继续观看' };
+const NEXT_VIEW: BaseItem = { Id: '@next-up', Name: '接下来' };
+interface ViewItems {
+  items: BaseItem[];
+  offset: number;
+  total?: number;
+  hasMore: boolean;
+  loading: boolean;
+  error: boolean;
+}
+
 /** /server/:serverId — immersive SenPlayer server home. */
 export default function HomePage() {
   const { serverId = '' } = useParams();
-  // Each server owns its home data and carousel state. Reusing the previous
-  // instance retained eight hero items, so appending the next server's items
-  // and truncating to eight kept displaying the old server indefinitely.
+  // Keep pending pages and carousel state scoped to the server/account.
   const server = useServers((s) => s.servers.find((x) => x.id === serverId));
   return <ServerHome key={`${serverId}:${server?.address}:${server?.userId}:${server?.token}`} serverId={serverId} />;
 }
@@ -49,105 +59,85 @@ function ServerHome({ serverId }: { serverId: string }) {
 
   const [loading, setLoading] = useState(true);
   const [views, setViews] = useState<BaseItem[]>([]);
-  const [heroItems, setHeroItems] = useState<BaseItem[]>([]);
-  const [viewThumbs, setViewThumbs] = useState<Record<string, BaseItem[]>>({});
-  const [resumeItems, setResumeItems] = useState<BaseItem[]>([]);
-  const [nextUpItems, setNextUpItems] = useState<BaseItem[]>([]);
-  const [latestByView, setLatestByView] = useState<Record<string, BaseItem[]>>({});
+  const [itemsByView, setItemsByView] = useState<Record<string, ViewItems>>({});
+  const [viewsError, setViewsError] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const generation = useRef(0);
+  const requests = useRef(new Map<string, AbortController>());
+
+  const loadView = useCallback(async (view: BaseItem, offset = 0) => {
+    if (!api || requests.current.has(view.Id)) return;
+    const controller = new AbortController();
+    requests.current.set(view.Id, controller);
+    const currentGeneration = generation.current;
+    setItemsByView(prev => ({ ...prev, [view.Id]: {
+      items: prev[view.Id]?.items ?? [], offset, total: prev[view.Id]?.total,
+      hasMore: prev[view.Id]?.hasMore ?? false, loading: true, error: false,
+    } }));
+    try {
+      const result = view.Id === RESUME_VIEW.Id ? await api.getResumeItems(PAGE_SIZE, offset, controller.signal)
+        : view.Id === NEXT_VIEW.Id ? await api.getNextUp(PAGE_SIZE, offset, controller.signal)
+        : await api.getLibraryItems(view, offset, PAGE_SIZE, controller.signal);
+      if (controller.signal.aborted || generation.current !== currentGeneration) return;
+      const page = result.Items ?? [];
+      const nextOffset = offset + page.length;
+      const total = Number.isFinite(result.TotalRecordCount) ? result.TotalRecordCount : undefined;
+      setItemsByView(prev => {
+        const merged = offset === 0 ? page : [...(prev[view.Id]?.items ?? []), ...page];
+        return { ...prev, [view.Id]: {
+          items: [...new Map(merged.map(item => [item.Id, item])).values()], offset: nextOffset, total,
+          hasMore: page.length > 0 && (total == null ? page.length >= PAGE_SIZE : nextOffset < total),
+          loading: false, error: false,
+        } };
+      });
+    } catch {
+      if (controller.signal.aborted || generation.current !== currentGeneration) return;
+      setItemsByView(prev => ({ ...prev, [view.Id]: { ...prev[view.Id], loading: false, error: true } }));
+    } finally {
+      if (requests.current.get(view.Id) === controller) requests.current.delete(view.Id);
+    }
+  }, [api]);
+
+  const heroItems = useMemo(() => [...new Map(views.flatMap(view => itemsByView[view.Id]?.items ?? [])
+    .map(item => [item.Id, item])).values()]
+    .filter(item => ['Movie', 'Series', 'Episode', 'Video'].includes(item.Type ?? '') && api?.backdropUrl(item, 1920)), [api, views, itemsByView]);
 
   useEffect(() => {
     if (!api) return;
     let mounted = true;
+    generation.current++;
+    const controller = new AbortController();
+    setLoading(true); setViewsError(false); setViews([]); setItemsByView({});
 
     (async () => {
       let viewList: BaseItem[] = [];
       try {
-        const res = await api.getUserViews();
+        const res = await api.getUserViews(controller.signal);
         viewList = res.Items;
       } catch {
-        /* show empty home */
+        if (mounted) setViewsError(true);
       }
       if (!mounted) return;
       setViews(viewList);
       setLoading(false);
 
-      // Views suitable for hero / latest rows
-      const mediaViews = viewList.filter((v) =>
-        ['movies', 'tvshows', 'mixed'].includes(v.CollectionType ?? ''),
-      );
-
-      // Fetch everything else; failures are skipped silently
       const jobs: Promise<void>[] = [];
+      // One paginated query per category supplies both its row and cover art.
+      // Collection containers use BoxSet rather than the latest-video endpoint.
+      for (const view of viewList) jobs.push(loadView(view));
 
-      // Hero: latest items with backdrops from the first 2 suitable views
-      for (const v of mediaViews.slice(0, 2)) {
-        jobs.push(
-          api
-            .getLatest(v.Id, 8)
-            .then((items) => {
-              if (!mounted) return;
-              const withBackdrop = items.filter((it) => api.backdropUrl(it, 1920) != null);
-              setHeroItems((prev) => [...prev, ...withBackdrop].slice(0, 8));
-            })
-            .catch(() => {}),
-        );
-      }
-
-      // Fan-stack thumbnails for "我的媒体" cards
-      for (const v of viewList) {
-        jobs.push(
-          api
-            .getLatest(v.Id, 4)
-            .then((items) => {
-              if (!mounted) return;
-              setViewThumbs((prev) => ({ ...prev, [v.Id]: items }));
-            })
-            .catch(() => {}),
-        );
-      }
-
-      // 继续观看
-      jobs.push(
-        api
-          .getResumeItems(12)
-          .then((res) => {
-            if (!mounted) return;
-            setResumeItems(res.Items);
-          })
-          .catch(() => {}),
-      );
-
-      // 接下来
-      jobs.push(
-        api
-          .getNextUp(12)
-          .then((res) => {
-            if (!mounted) return;
-            setNextUpItems(res.Items);
-          })
-          .catch(() => {}),
-      );
-
-      // 最新 per view (first 3)
-      for (const v of viewList.slice(0, 3)) {
-        jobs.push(
-          api
-            .getLatest(v.Id, 12)
-            .then((items) => {
-              if (!mounted) return;
-              setLatestByView((prev) => ({ ...prev, [v.Id]: items }));
-            })
-            .catch(() => {}),
-        );
-      }
+      jobs.push(loadView(RESUME_VIEW), loadView(NEXT_VIEW));
 
       await Promise.allSettled(jobs);
     })();
 
     return () => {
       mounted = false;
+      controller.abort(); generation.current++;
+      for (const request of requests.current.values()) request.abort();
+      requests.current.clear();
     };
-  }, [api, serverId]);
+  }, [api, serverId, retry, loadView]);
 
   if (!api) {
     return (
@@ -166,15 +156,32 @@ function ServerHome({ serverId }: { serverId: string }) {
     );
   }
 
-  const detailRoute = (item: BaseItem) =>
-    item.Type === 'Series'
-      ? `/server/${serverId}/series/${item.Id}`
-      : `/server/${serverId}/${item.Type === 'Episode' ? 'episode' : 'movie'}/${item.Id}`;
+  const detailRoute = (item: BaseItem) => {
+    if (item.Type === 'Series') return `/server/${serverId}/series/${item.Id}`;
+    if (item.Type === 'BoxSet' || item.IsFolder) return `/server/${serverId}/library/${item.Id}`;
+    return `/server/${serverId}/${item.Type === 'Episode' ? 'episode' : 'movie'}/${item.Id}`;
+  };
 
   const resumeClick = (item: BaseItem) => {
     if (item.Type === 'Episode') navigate(`/server/${serverId}/episode/${item.Id}`);
     else navigate(`/server/${serverId}/movie/${item.Id}`);
   };
+
+  const rowStatus = (view: BaseItem, row?: ViewItems) => <>
+    {(!row || row.loading) && <div className="flex min-h-40 min-w-44 items-center justify-center text-sm text-gray-400" role="status">加载中…</div>}
+    {row?.error && <div className="flex min-h-40 min-w-52 flex-col items-center justify-center gap-3 rounded-xl bg-white px-4 text-sm text-gray-500">
+      <span>此列表暂时加载失败</span>
+      <button onClick={() => { void loadView(view, row.offset); }} className="rounded-lg bg-accent px-4 py-1.5 text-white">重试</button>
+    </div>}
+    {row && !row.loading && !row.error && row.items.length === 0 && <div className="flex min-h-40 min-w-52 items-center justify-center text-sm text-gray-400">此分类暂无内容</div>}
+    {row?.hasMore && !row.loading && !row.error && <button onClick={() => { void loadView(view, row.offset); }} className="my-2 min-w-32 shrink-0 rounded-xl bg-white px-4 text-sm text-accent shadow-card">加载更多</button>}
+  </>;
+  const loadMore = (view: BaseItem) => {
+    const row = itemsByView[view.Id];
+    return row?.hasMore && !row.loading && !row.error ? () => { void loadView(view, row.offset); } : undefined;
+  };
+  const resumeRow = itemsByView[RESUME_VIEW.Id];
+  const nextRow = itemsByView[NEXT_VIEW.Id];
 
   return (
     <div className="h-full overflow-y-auto px-8 pb-10">
@@ -185,6 +192,8 @@ function ServerHome({ serverId }: { serverId: string }) {
 
       {loading ? (
         <Spinner label="正在加载媒体库…" />
+      ) : viewsError ? (
+        <ErrorState message="无法加载媒体分类，请检查服务器连接后重试。" onRetry={() => setRetry(value => value + 1)} />
       ) : (
         <>
           {/* Hero slides up under the header */}
@@ -196,7 +205,7 @@ function ServerHome({ serverId }: { serverId: string }) {
           {views.length > 0 && (
             <SectionRow title="我的媒体" count={views.length}>
               {views.map((view, i) => {
-                const thumbs = settings.showPreviewImage ? (viewThumbs[view.Id] ?? []).slice(0, 4) : [];
+                const thumbs = settings.showPreviewImage ? (itemsByView[view.Id]?.items ?? []).slice(0, 4) : [];
                 const gradient = PASTEL_GRADIENTS[i % PASTEL_GRADIENTS.length];
                 const folderDate = settings.showFolderTime ? mediaFolderDate(view) : '';
                 const childCount = view.ChildCount ?? view.RecursiveItemCount;
@@ -244,9 +253,9 @@ function ServerHome({ serverId }: { serverId: string }) {
           )}
 
           {/* 继续观看 */}
-          {resumeItems.length > 0 && (
-            <SectionRow title="继续观看" count={resumeItems.length}>
-              {orderMediaItems(resumeItems, settings.sortFoldersSeparately).map((item) => (
+          {resumeRow && (resumeRow.items.length > 0 || resumeRow.error) && (
+            <SectionRow title="继续观看" count={resumeRow.total} onLoadMore={loadMore(RESUME_VIEW)}>
+              {orderMediaItems(resumeRow.items, settings.sortFoldersSeparately).map((item) => (
                 <PosterCard
                   key={item.Id}
                   api={api}
@@ -256,13 +265,14 @@ function ServerHome({ serverId }: { serverId: string }) {
                   onClick={() => resumeClick(item)}
                 />
               ))}
+              {rowStatus(RESUME_VIEW, resumeRow)}
             </SectionRow>
           )}
 
           {/* 接下来 */}
-          {nextUpItems.length > 0 && (
-            <SectionRow title="接下来" count={nextUpItems.length}>
-              {orderMediaItems(nextUpItems, settings.sortFoldersSeparately).map((item) => (
+          {nextRow && (nextRow.items.length > 0 || nextRow.error) && (
+            <SectionRow title="接下来" count={nextRow.total} onLoadMore={loadMore(NEXT_VIEW)}>
+              {orderMediaItems(nextRow.items, settings.sortFoldersSeparately).map((item) => (
                 <PosterCard
                   key={item.Id}
                   api={api}
@@ -272,19 +282,21 @@ function ServerHome({ serverId }: { serverId: string }) {
                   onClick={() => navigate(detailRoute(item))}
                 />
               ))}
+              {rowStatus(NEXT_VIEW, nextRow)}
             </SectionRow>
           )}
 
           {/* 最新 per view */}
-          {views.slice(0, 3).map((view) => {
-            const items = latestByView[view.Id] ?? [];
-            if (items.length === 0) return null;
+          {views.map((view) => {
+            const row = itemsByView[view.Id];
+            const items = row?.items ?? [];
             return (
               <SectionRow
                 key={view.Id}
                 title={`最新${view.Name}`}
-                count={items.length}
+                count={row?.total}
                 onMore={() => navigate(`/server/${serverId}/library/${view.Id}`)}
+                onLoadMore={loadMore(view)}
               >
                 {orderMediaItems(items, settings.sortFoldersSeparately).map((item) => (
                   <PosterCard
@@ -295,6 +307,7 @@ function ServerHome({ serverId }: { serverId: string }) {
                     onClick={() => navigate(detailRoute(item))}
                   />
                 ))}
+                {rowStatus(view, row)}
               </SectionRow>
             );
           })}

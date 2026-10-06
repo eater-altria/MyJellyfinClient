@@ -20,6 +20,10 @@ export default function HeroCarousel({
   const count = items.length;
   const safeIndex = count > 0 ? index % count : 0;
   const current = count > 0 ? items[safeIndex] : null;
+  // Keep all items navigable without mounting/downloading every backdrop.
+  const visibleIndexes = [...new Set([safeIndex, (safeIndex + count - 1) % count, (safeIndex + 1) % count])];
+  const dotStart = Math.max(0, Math.min(count - 7, safeIndex - 3));
+  const dotIndexes = Array.from({ length: Math.min(7, count) }, (_, i) => dotStart + i);
 
   const go = useCallback(
     (dir: number) => {
@@ -57,7 +61,8 @@ export default function HeroCarousel({
       onClick={openDetail}
     >
       {/* Cross-fading backdrops */}
-      {items.map((item, i) => {
+      {visibleIndexes.map(i => {
+        const item = items[i];
         const url = api.backdropUrl(item, 1920);
         if (!url) return null;
         return (
@@ -136,9 +141,10 @@ export default function HeroCarousel({
       {/* Dot indicators */}
       {count > 1 && (
         <div className="absolute inset-x-0 bottom-3 flex items-center justify-center gap-1.5">
-          {items.map((item, i) => (
+          {dotIndexes.map(i => (
             <button
-              key={item.Id}
+              key={items[i].Id}
+              aria-label={`查看第 ${i + 1} 张预览`}
               onClick={(e) => {
                 e.stopPropagation();
                 setIndex(i);

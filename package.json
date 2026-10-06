@@ -11,6 +11,7 @@
     "typecheck": "tsc -b --noEmit",
     "test:servers": "node scripts/test-media-servers.cjs",
     "test:playback": "node scripts/test-playback-cancel.cjs",
+    "test:home": "node scripts/test-home-libraries.cjs",
     "test:settings": "node scripts/test-list-settings.cjs && node scripts/test-playback-preferences.cjs && node scripts/test-browser-settings.cjs"
   },
   "dependencies": {

@@ -7,6 +7,7 @@ src-tauri/gen/
 .acl-recovery/
 .tmp/
 .local/
+.codex-remote-attachments/
 .env
 .env.*
 !.env.example
