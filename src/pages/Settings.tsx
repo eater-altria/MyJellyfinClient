@@ -257,10 +257,8 @@ function PlayTab() {
     <div>
       <Section label="播放" footnote="可提高调节进度的时间准确度，但可能影响定位的速度">
         <ToggleRow label="从上次进度播放" field="resumeFromLastPosition" />
-        <ToggleRow label="暂停后锁定播放操作" field="autoLockOnPause" />
         <ToggleRow label="精准定位进度" field="preciseSeek" />
       </Section>
-      <div className="mb-5 px-1 text-[11px] text-gray-400">暂停锁定可避免误触进度、倍速和音轨；退出、空格恢复播放、K 键或解锁按钮仍可使用。</div>
       <Section label="快退快进" footnote="对所有用到“快退快进”的功能均生效">
         <SelectRow
           label="快退时间"
@@ -381,7 +379,7 @@ function VideoTab() {
           </select>
         </Row>
       </Section>
-      <Section label="视频截图" footnote={isTauri ? '截图保存在系统图片目录的 MyJellyfinClient 文件夹。' : '截图需服务器允许跨域访问；复制图片需浏览器允许剪贴板权限。'}>
+      <Section label="视频截图" footnote={isTauri ? '默认保存到系统图片目录，无法写入时使用应用数据目录；开发版使用开发数据目录。截图完成后会显示实际保存路径。' : '截图需服务器允许跨域访问；复制图片需浏览器允许剪贴板权限。'}>
         <SelectRow
           label="截图格式"
           field="screenshotFormat"

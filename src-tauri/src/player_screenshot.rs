@@ -2,6 +2,7 @@
 //! acknowledged before decoding/copying, so failed captures never report success.
 use super::{pipe_write, screenshot_format, setting_bool, wide, write_json, PlayerState};
 use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::{json, Value};
@@ -12,19 +13,56 @@ use windows_sys::Win32::Graphics::GdiPlus::{self as gdip, BitmapData, GdiplusSta
 use windows_sys::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
 use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 
+fn screenshot_directories(development: Option<&Path>, pictures: Option<&Path>, app_data: Option<&Path>) -> Vec<PathBuf> {
+    // Development processes may only write within their configured data root.
+    // Installed builds prefer Pictures, with a durable application-data fallback.
+    if let Some(root) = development { return vec![root.join("screenshots")]; }
+    let mut directories = Vec::new();
+    if let Some(root) = pictures { directories.push(root.join("MyJellyfinClient")); }
+    if let Some(root) = app_data { directories.push(root.join("screenshots")); }
+    directories
+}
+
+struct CaptureTarget {
+    path: PathBuf,
+    complete: bool,
+}
+impl Drop for CaptureTarget {
+    fn drop(&mut self) {
+        // Remove only the file reserved for this request, including partial IPC failures.
+        if !self.complete { let _ = std::fs::remove_file(&self.path); }
+    }
+}
+
+fn prepare_capture_target(directories: &[PathBuf], format: &str) -> Result<CaptureTarget, String> {
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    for dir in directories {
+        if std::fs::create_dir_all(dir).is_err() { continue; }
+        let path = dir.join(format!("Screenshot-{stamp}.{format}"));
+        // Existing directories can still deny writes. Reserve the actual output
+        // filename to check access before handing it to mpv; never overwrite a user's file.
+        if std::fs::OpenOptions::new().write(true).create_new(true).open(&path).is_ok() {
+            return Ok(CaptureTarget { path, complete: false });
+        }
+    }
+    Err("截图保存位置不可写，请检查图片或应用数据目录的访问权限".into())
+}
+
 pub(super) fn request(app: &AppHandle, pid: u32, pipe_path: &str, pipe: &Sender<Value>, settings: &Value) {
     let app = app.clone();
     let pipe_path = pipe_path.to_string();
     let pipe = pipe.clone();
     let format = screenshot_format(settings);
     let copy = setting_bool(settings, "copyScreenshotToClipboard", true);
+    let development = std::env::var_os("MJC_WEBVIEW_DATA").filter(|path| !path.is_empty()).map(PathBuf::from);
+    let pictures = app.path().picture_dir().ok();
+    let app_data = app.path().app_local_data_dir().ok();
+    let directories = screenshot_directories(development.as_deref(), pictures.as_deref(), app_data.as_deref());
     std::thread::spawn(move || {
         let result = (|| -> Result<(std::path::PathBuf, Option<Result<Vec<u8>, String>>), String> {
             if !app.state::<PlayerState>().session.lock().unwrap().as_ref().is_some_and(|s| s.pid == pid) { return Err("播放已结束".into()); }
-            let dir = app.path().picture_dir().map_err(|e| e.to_string())?.join("MyJellyfinClient");
-            std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建截图目录: {e}"))?;
-            let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-            let path = dir.join(format!("Screenshot-{stamp}.{format}"));
+            let mut target = prepare_capture_target(&directories, format)?;
+            let path = target.path.clone();
             // A separate IPC connection returns the actual screenshot result.
             // The event reader and UI command worker remain responsive.
             if !app.state::<PlayerState>().session.lock().unwrap().as_ref().is_some_and(|s| s.pid == pid) { return Err("播放已结束".into()); }
@@ -39,7 +77,8 @@ pub(super) fn request(app: &AppHandle, pid: u32, pipe_path: &str, pipe: &Sender<
                     break;
                 }
             }
-            if !succeeded || !path.is_file() { return Err("截图未生成".into()); }
+            if !succeeded || std::fs::metadata(&path).map(|metadata| metadata.len() == 0).unwrap_or(true) { return Err("截图未生成".into()); }
+            target.complete = true;
             let dib = if copy { Some(decode_dib(&path)) } else { None };
             Ok((path, dib))
         })();
@@ -128,6 +167,37 @@ fn copy_dib(hwnd: HWND, bytes: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screenshot_paths_respect_development_data_and_fall_back_after_directory_failure() {
+        let root = std::env::temp_dir().join(format!("mjc-screenshot-path-test-{}", std::process::id()));
+        let development = root.join("development");
+        let pictures = root.join("pictures");
+        let app_data = root.join("app-data");
+        let directories = screenshot_directories(Some(&development), Some(&pictures), Some(&app_data));
+        assert_eq!(directories, vec![development.join("screenshots")]);
+        let target = prepare_capture_target(&directories, "png").unwrap();
+        assert!(target.path.starts_with(&development));
+        let incomplete = target.path.clone();
+        drop(target);
+        assert!(!incomplete.exists(), "a failed screenshot must not leave an empty file");
+
+        // A file occupying the first directory reproduces a real create_dir_all
+        // failure without changing Windows ACLs or touching the user's Pictures.
+        std::fs::create_dir_all(&pictures).unwrap();
+        std::fs::write(pictures.join("MyJellyfinClient"), b"fixture").unwrap();
+        let directories = screenshot_directories(None, Some(&pictures), Some(&app_data));
+        let mut target = prepare_capture_target(&directories, "jpg").unwrap();
+        assert_eq!(target.path.parent().unwrap(), app_data.join("screenshots"));
+        std::fs::write(&target.path, b"saved screenshot fixture").unwrap();
+        target.complete = true;
+        let saved = target.path.clone();
+        drop(target);
+        assert!(saved.exists(), "a completed capture must be preserved");
+        std::fs::remove_file(saved).unwrap();
+        assert_eq!(std::fs::read(pictures.join("MyJellyfinClient")).unwrap(), b"fixture");
+        assert!(prepare_capture_target(&directories[..1], "png").is_err(), "all unwritable candidates must report failure");
+    }
     #[test]
     fn clipboard_dib_preserves_bgra_pixels_and_top_down_orientation() {
         let pixels = [0, 0, 255, 255, 255, 0, 0, 255];

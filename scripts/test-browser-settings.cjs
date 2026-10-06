@@ -4,10 +4,21 @@ const storage = new Map();
 global.localStorage = { getItem: k => storage.get(k) ?? null, setItem: (k,v) => storage.set(k,String(v)), removeItem:k=>storage.delete(k) };
 global.HTMLElement = class HTMLElement {};
 global.window = { localStorage: global.localStorage };
+storage.set('mjc:settings', JSON.stringify({ version: 0, state: {
+  autoLockOnPause: true, autoHideControlsSeconds: 10, accentColor: '#30b0c7', jpegQuality: 70,
+} }));
 const output = esbuild.buildSync({ stdin: { contents: "export {bindBrowserPlaybackKeys} from './src/player/browserKeyboard'; export {preferredTrack} from './src/player/trackSelection'; export {useSettings} from './src/store/settings'; export {MediaServerApi,matchesExternalSubtitleRule} from './src/api/mediaServer';", resolveDir: process.cwd(), loader: 'ts' },
   bundle:true,platform:'node',format:'cjs',packages:'external',write:false }).outputFiles[0].text;
 const mod={exports:{}};new Function('require','module','exports',output)(require,mod,mod.exports);
 const {bindBrowserPlaybackKeys,preferredTrack,useSettings,MediaServerApi,matchesExternalSubtitleRule}=mod.exports;
+assert.equal(useSettings.getState().autoHideControlsSeconds, 3, 'Existing settings must adopt the requested 3-second interval');
+assert.equal(useSettings.getState().accentColor, '#30b0c7', 'Timeout migration must preserve other preferences');
+assert.equal(useSettings.getState().jpegQuality, 70);
+assert(!Object.hasOwn(useSettings.getState(), 'autoLockOnPause'), 'Retired pause-lock setting must be removed during migration');
+useSettings.getState().set('autoHideControlsSeconds', 5);
+useSettings.persist.rehydrate();
+assert.equal(useSettings.getState().autoHideControlsSeconds, 5, 'Later user changes must not be reset on each launch');
+assert.equal(JSON.parse(storage.get('mjc:settings')).version, 2);
 
 const handlers=new Map(),timers=new Map();let serial=0;
 const target={addEventListener:(k,fn)=>handlers.set(k,fn),removeEventListener:k=>handlers.delete(k),
@@ -16,9 +27,9 @@ const fire=(kind,key,repeat=false)=>handlers.get(kind)({key,repeat,target:null,p
 const hold=()=>{const timer=[...timers.values()].find(t=>t.ms===350);assert(timer,'hold timer missing');timer.fn();};
 const video={currentTime:100,duration:150,volume:1,playbackRate:1.25,muted:false,
   fastSeek(time){this.currentTime=time;this.fastSeekCalls=(this.fastSeekCalls??0)+1;}};
-let locked=false,exits=0,plays=0;
+let exits=0,plays=0,activities=0,fullscreens=0;
 const dispose=bindBrowserPlaybackKeys(target,()=>video,()=>useSettings.getState(),{
-  togglePlay:()=>plays++,toggleLock:()=>{locked=!locked;},fullscreen(){},exit:()=>exits++,activity(){},locked:()=>locked});
+  togglePlay:()=>plays++,fullscreen:()=>fullscreens++,exit:()=>exits++,activity:()=>activities++});
 useSettings.setState({rewindSeconds:5,forwardSeconds:30,preciseSeek:true,longPressLeftRate:0.25,longPressRightRate:3,numberKeyRateSwitch:false});
 fire('keydown','ArrowLeft');fire('keyup','ArrowLeft');assert.equal(video.currentTime,95);
 fire('keydown','ArrowRight');fire('keyup','ArrowRight');assert.equal(video.currentTime,125);
@@ -33,12 +44,21 @@ fire('keydown','9');assert.equal(video.playbackRate,1.25,'disabled numeric rate 
 useSettings.setState({numberKeyRateSwitch:true});fire('keydown','2');assert.equal(video.playbackRate,2);
 fire('keydown','0');assert.equal(video.playbackRate,1);
 useSettings.setState({preciseSeek:false});fire('keydown','ArrowLeft');fire('keyup','ArrowLeft');assert.equal(video.fastSeekCalls,1);
-locked=true;fire('keydown','ArrowRight');fire('keyup','ArrowRight');assert.equal(video.currentTime,120);
-fire('keydown','9');assert.equal(video.playbackRate,1);fire('keydown',' ');assert.equal(plays,2,'pause lock must still allow resume');
-fire('keydown','Escape');assert.equal(exits,1,'exit must remain usable when locked');
-fire('keydown','K');assert.equal(locked,false,'K must unlock controls');
+video.paused=true;fire('keydown','ArrowRight');fire('keyup','ArrowRight');assert.equal(video.currentTime,150, 'Paused seeking must remain usable');
+const beforeSpace=activities;fire('keydown',' ');assert.equal(plays,2);
+assert.equal(activities,beforeSpace,'Space must not wake hidden controls');
+fire('keydown','Enter');assert.equal(fullscreens,1,'Enter must switch fullscreen while paused');
+fire('keydown','Escape');assert.equal(exits,1,'exit must remain usable while paused');
+const searchInput = new HTMLElement(); searchInput.tagName = 'INPUT';
+handlers.get('keydown')({ key: 'Escape', repeat: false, target: searchInput, preventDefault() {} });
+assert.equal(exits, 2, 'Escape must close an overlay even when its search input has focus');
+fire('keydown','Escape',true); assert.equal(exits, 2, 'Holding Escape must not close a menu and then exit playback');
+const focusedButton = new HTMLElement(); focusedButton.tagName = 'BUTTON';
+handlers.get('keydown')({ key: ' ', repeat: false, target: focusedButton, preventDefault() {} });
+assert.equal(plays, 2, 'Focused buttons must handle their own keyboard activation without a duplicate global pause');
+const beforeK=activities;fire('keydown','K');assert.equal(activities,beforeK,'Retired K lock shortcut must do nothing');
 dispose();assert.equal(handlers.size,0);assert.equal(timers.size,0);
-console.log('PASS: configured seek, fast/exact seek, held rates and restoration, focus cancellation, numeric rate, lock and exit');
+console.log('PASS: configured seek, fast/exact seek, held rates and restoration, focus cancellation, numeric rate, paused seeking/fullscreen, hidden Space playback and exit');
 
 assert(matchesExternalSubtitleRule('C:\\Movie\\Film.mkv','C:\\Movie\\Film.zh.srt','sameFolderSameName'));
 assert(!matchesExternalSubtitleRule('C:\\Movie\\Film.mkv','C:\\Movie\\Other.srt','sameFolderSameName'));

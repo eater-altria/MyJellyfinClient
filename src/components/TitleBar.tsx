@@ -10,6 +10,7 @@ import {
 } from '../platform/window';
 import { IconClose, IconMaximize, IconMinimize } from './icons';
 import { PLAYER_EXIT_EVENT } from '../player/exitPlayback';
+import { usePlaybackTitle } from '../player/playbackTitle';
 
 /** Frameless title bar with Windows window controls on the right. */
 export default function TitleBar({ dark }: { dark?: boolean }) {
@@ -18,6 +19,7 @@ export default function TitleBar({ dark }: { dark?: boolean }) {
   const location = useLocation();
   const navigate = useNavigate();
   const isPlayer = location.pathname.startsWith('/player');
+  const title = usePlaybackTitle((state) => state.title);
   const exiting = useRef(false);
   useEffect(() => { exiting.current = false; }, [location.pathname]);
   const close = () => {
@@ -60,8 +62,8 @@ export default function TitleBar({ dark }: { dark?: boolean }) {
     >
       {!isPlayer && <div className="flex-1 self-stretch" data-tauri-drag-region />}
 
-      {isPlayer && <div data-tauri-drag-region className="min-w-0 flex-1 self-stretch px-4 text-center text-xs leading-9 text-white/50">
-        <span className="pointer-events-none">MyJellyfinClient · 播放器</span>
+      {isPlayer && <div data-tauri-drag-region className="min-w-0 flex-1 truncate self-stretch px-5 text-xs leading-9 text-white/70" title={title}>
+        <span className="pointer-events-none">{title || '播放器'}</span>
       </div>}
       <div className="no-drag flex items-center" onDoubleClick={e => e.stopPropagation()}>
         <button className={ctrlBtn} onClick={windowMinimize} title="最小化">

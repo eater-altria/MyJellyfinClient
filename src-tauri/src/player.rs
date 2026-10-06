@@ -7,7 +7,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
 
@@ -20,9 +20,13 @@ mod screenshot;
 #[path = "player_framing.rs"]
 mod framing;
 
+#[cfg(test)]
+#[path = "player_osc_render.rs"]
+mod osc_render;
+
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, HWND, LPARAM, LRESULT, LocalFree, POINT, RECT, WPARAM, INVALID_HANDLE_VALUE,
+    CloseHandle, HANDLE, HWND, LPARAM, LRESULT, LocalFree, POINT, RECT, WPARAM, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::Graphics::Gdi::{GetStockObject, ScreenToClient, BLACK_BRUSH, HBRUSH};
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
@@ -40,17 +44,18 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     TH32CS_SNAPPROCESS,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Diagnostics::Debug::{GetErrorMode, SetErrorMode, SEM_FAILCRITICALERRORS};
 use windows_sys::Win32::System::Threading::{
-    CreateProcessW, OpenProcess, TerminateProcess,
+    CreateProcessW, GetExitCodeProcess, OpenProcess, TerminateProcess, WaitForSingleObject,
     CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION, PROCESS_TERMINATE, STARTUPINFOW,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    SetActiveWindow, SetFocus, SetCapture, ReleaseCapture, GetDoubleClickTime, VK_DOWN, VK_ESCAPE, VK_RETURN, VK_LEFT, VK_RIGHT, VK_UP, VK_BACK,
+    SetActiveWindow, SetFocus, GetFocus, SetCapture, ReleaseCapture, GetDoubleClickTime, VK_DOWN, VK_ESCAPE, VK_RETURN, VK_LEFT, VK_RIGHT, VK_UP, VK_BACK,
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, EnumChildWindows, GetClassNameW, GetClientRect,
-    GetWindowLongPtrW, GetWindowRect, GetCursorPos, GetParent, IsIconic, IsZoomed, LoadCursorW, MoveWindow, RegisterClassW, WindowFromPoint, SendMessageW,
+    GetWindowLongPtrW, GetWindowRect, GetCursorPos, GetParent, IsIconic, IsZoomed, IsWindowVisible, LoadCursorW, MoveWindow, RegisterClassW, WindowFromPoint, SendMessageW,
     SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, GWL_STYLE, HTCLIENT, HWND_TOP, IDC_ARROW, IDC_HAND, IDC_IBEAM,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_SHOW, WNDCLASSW, WS_CHILD, WS_CLIPSIBLINGS, WS_DISABLED,
@@ -126,9 +131,34 @@ impl Drop for HostedAttrs {
     }
 }
 
-/// Spawn a process the way std::process::Command does on hosted/ACE-filtered
-/// systems. Returns the child pid.
-unsafe fn spawn_hosted(exe: &std::path::Path, args: &[String], cwd: &std::path::Path) -> Result<u32, String> {
+/// Retain the creation handle: opening the process again can be denied by a
+/// process filter, and CreateProcessW success does not imply DLL initialization.
+struct StartedProcess {
+    pid: u32,
+    handle: HANDLE,
+}
+impl StartedProcess {
+    fn exit_code(&self) -> Option<u32> {
+        unsafe {
+            if WaitForSingleObject(self.handle, 0) != WAIT_OBJECT_0 { return None; }
+            let mut code = 0;
+            (GetExitCodeProcess(self.handle, &mut code) != 0).then_some(code)
+        }
+    }
+    fn terminate(&self) {
+        unsafe { TerminateProcess(self.handle, 1); }
+    }
+}
+impl Drop for StartedProcess {
+    fn drop(&mut self) { unsafe { CloseHandle(self.handle); } }
+}
+
+/// Keep the existing hosted-process compatibility path. The process error mode
+/// is set once, inherited by children, and never changes Windows system settings.
+/// Loader failures then return an exit code instead of a blocking Windows dialog.
+unsafe fn spawn_hosted_tracked(exe: &std::path::Path, args: &[String], cwd: &std::path::Path) -> Result<StartedProcess, String> {
+    static ERROR_MODE: Once = Once::new();
+    ERROR_MODE.call_once(|| unsafe { SetErrorMode(GetErrorMode() | SEM_FAILCRITICALERRORS); });
     let attrs = HostedAttrs::new().ok_or_else(|| "无法创建进程安全属性".to_string())?;
     let sa = attrs.sa();
 
@@ -138,6 +168,7 @@ unsafe fn spawn_hosted(exe: &std::path::Path, args: &[String], cwd: &std::path::
         cmdline.push_str(&quote_windows_arg(a));
     }
     let mut cmd_w = wide(&cmdline);
+    let exe_w = wide(&exe.to_string_lossy());
     let cwd_w = wide(&cwd.to_string_lossy());
 
     let mut si: STARTUPINFOW = std::mem::zeroed();
@@ -145,7 +176,7 @@ unsafe fn spawn_hosted(exe: &std::path::Path, args: &[String], cwd: &std::path::
     let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
 
     let ok = CreateProcessW(
-        std::ptr::null(),
+        exe_w.as_ptr(),
         cmd_w.as_mut_ptr(),
         &sa,
         std::ptr::null(),
@@ -160,8 +191,51 @@ unsafe fn spawn_hosted(exe: &std::path::Path, args: &[String], cwd: &std::path::
         return Err(format!("CreateProcessW 失败: {}", std::io::Error::last_os_error()));
     }
     CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    Ok(pi.dwProcessId)
+    Ok(StartedProcess { pid: pi.dwProcessId, handle: pi.hProcess })
+}
+
+#[cfg(test)]
+unsafe fn spawn_hosted(exe: &std::path::Path, args: &[String], cwd: &std::path::Path) -> Result<u32, String> {
+    Ok(spawn_hosted_tracked(exe, args, cwd)?.pid)
+}
+
+const STATUS_DLL_INIT_FAILED: u32 = 0xc0000142;
+
+fn startup_exit_message(code: u32) -> String {
+    if code == STATUS_DLL_INIT_FAILED {
+        "播放器初始化失败（0xC0000142），自动重试后仍无法启动，请稍后重试".into()
+    } else {
+        format!("播放器在启动时退出（0x{code:08X}）")
+    }
+}
+
+/// Retry only a transient DLL initialization failure, before any media is loaded.
+/// Each failed child is fully cleaned up; media errors are never retried here.
+fn connect_player_process(pipe_path: &str, timeout: Duration,
+    mut launch: impl FnMut() -> Result<StartedProcess, String>,
+) -> Result<(StartedProcess, std::fs::File), String> {
+    for attempt in 0..2 {
+        let process = launch()?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(code) = process.exit_code() {
+                if code == STATUS_DLL_INIT_FAILED && attempt == 0 {
+                    std::thread::sleep(Duration::from_millis(150));
+                    break;
+                }
+                return Err(startup_exit_message(code));
+            }
+            if let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(pipe_path) {
+                return Ok((process, file));
+            }
+            if Instant::now() >= deadline {
+                process.terminate();
+                return Err("播放器启动超时，无法连接控制通道，请重试".into());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    unreachable!("the second startup attempt either connects or returns an error")
 }
 
 // Windows argv escaping preserves quoted HTTP header values and file titles.
@@ -732,6 +806,38 @@ pub fn player_escape(state: tauri::State<'_, PlayerState>) -> bool {
     } else { false }
 }
 
+#[tauri::command]
+pub fn player_keyboard_action(state: tauri::State<'_, PlayerState>, key: String) -> bool {
+    if !matches!(key.as_str(), "SPACE" | "ENTER") { return false; }
+    let session = state.session.lock().unwrap();
+    if let Some(session) = session.as_ref() {
+        // Use the same Lua input path as the native host, including menu priority.
+        pipe_write(&session.pipe, json!({"command": ["script-message", "mjc-key-down", key]}));
+        pipe_write(&session.pipe, json!({"command": ["script-message", "mjc-key-up", key]}));
+        true
+    } else { false }
+}
+
+/// Window events run on the window's UI thread. Restore the input host after
+/// activation, while leaving hidden/loading and minimized windows alone.
+pub fn on_main_window_focused(state: &PlayerState, focused: bool) {
+    if !focused {
+        if let Ok(session) = state.session.try_lock() {
+            if let Some(session) = session.as_ref() {
+                pipe_write(&session.pipe, json!({"command": ["script-message", "mjc-cancel-input"]}));
+            }
+        }
+        return;
+    }
+    let host = state.host.load(Ordering::SeqCst);
+    unsafe {
+        if host != 0 && IsWindowVisible(host as HWND) != 0 && IsIconic(GetParent(host as HWND)) == 0
+            && GetFocus() != host as HWND {
+            SetFocus(host as HWND);
+        }
+    }
+}
+
 fn restore_window(app: &AppHandle, state: &PlayerState, before: Option<(bool, tauri::PhysicalSize<u32>)>) {
     *state.video_ratio.lock().unwrap() = None;
     if let Some(window) = app.get_webview_window("main") {
@@ -751,13 +857,13 @@ struct StartupGuard<'a> {
     state: &'a PlayerState,
     before: Option<(bool, tauri::PhysicalSize<u32>)>,
     host: isize,
-    pid: Option<u32>,
+    process: Option<StartedProcess>,
     armed: bool,
 }
 impl Drop for StartupGuard<'_> {
     fn drop(&mut self) {
         if !self.armed { return; }
-        if let Some(pid) = self.pid { kill_pid(pid); }
+        if let Some(process) = &self.process { process.terminate(); }
         if self.host != 0 { unsafe { DestroyWindow(self.host as HWND); } }
         self.state.host.store(0, Ordering::SeqCst);
         restore_window(self.app, self.state, self.before);
@@ -855,7 +961,7 @@ pub fn start_playback(
     let scale = window.scale_factor().unwrap_or(1.0);
     state.ui_dpi.store((scale * 96.0).round() as u32, Ordering::SeqCst);
     let window_before = window.inner_size().ok().map(|size| (window.is_fullscreen().unwrap_or(false), size));
-    let mut startup = StartupGuard { app: &app, state: &state, before: window_before, host: 0, pid: None, armed: true };
+    let mut startup = StartupGuard { app: &app, state: &state, before: window_before, host: 0, process: None, armed: true };
     state.fullscreen.store(window.is_fullscreen().unwrap_or(false), Ordering::SeqCst);
     *state.last_size.lock().unwrap() = (0, 0);
     if setting_bool(&opts.settings, "matchWindowToVideoRatio", true) {
@@ -894,6 +1000,8 @@ pub fn start_playback(
         "--cache=yes".into(),
         "--ytdl=no".into(),
         format!("--title={}", opts.title),
+        // --title only names the mpv window. OSC media-title must use server metadata too.
+        format!("--force-media-title={}", opts.title),
         format!("--start={}", opts.start_seconds.max(0.0)),
     ];
     args.extend(playback_setting_args(&opts));
@@ -924,22 +1032,13 @@ pub fn start_playback(
         }
     }
 
-    // Spawn the way std does on ACE-filtered systems (plain CreateProcessW +
-    // hosted-token security attributes) so mpv can create its video window.
-    let pid = unsafe { spawn_hosted(&mpv, &args, mpv.parent().unwrap()) }.map_err(|e| format!("启动 mpv 失败: {e}"))?;
-    startup.pid = Some(pid);
-
-    // Connect to the IPC pipe (mpv creates it shortly after startup)
     let pipe_path = format!("\\\\.\\pipe\\{}", pipe_name);
-    let mut pipe_file = None;
-    for _ in 0..60 {
-        std::thread::sleep(Duration::from_millis(100));
-        if let Ok(f) = std::fs::OpenOptions::new().read(true).write(true).open(&pipe_path) {
-            pipe_file = Some(f);
-            break;
-        }
-    }
-    let mut pipe_file = pipe_file.ok_or_else(|| "无法连接 mpv IPC".to_string())?;
+    let (process, mut pipe_file) = connect_player_process(&pipe_path, Duration::from_secs(6), || {
+        unsafe { spawn_hosted_tracked(&mpv, &args, mpv.parent().unwrap()) }
+            .map_err(|e| format!("启动播放器失败: {e}"))
+    })?;
+    let pid = process.pid;
+    startup.process = Some(process);
 
     let mut command_file = None;
     for _ in 0..60 {
@@ -1260,6 +1359,71 @@ fn ratio_size(current: (i32, i32), previous: (i32, i32), ratio: f64) -> (i32, i3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_exit_fixture() {
+        // Run this exact test in a child process to produce a controlled exit
+        // code without a shell, environment mutation or a real broken DLL.
+        if let Some(code) = std::env::args().find_map(|arg| {
+            arg.strip_prefix("mjc-exit-code=").and_then(|value| value.parse::<u32>().ok())
+        }) { std::process::exit(code as i32); }
+    }
+
+    #[test]
+    fn startup_detects_exited_children_and_retries_only_dll_initialization() {
+        let fixture = std::env::current_exe().unwrap();
+        let cwd = fixture.parent().unwrap();
+        let mpv = mpv_exe_path().expect("bundled mpv");
+        let pipe_path = format!("\\\\.\\pipe\\mjc-startup-retry-{}", std::process::id());
+        let fixture_args = |code: u32| vec!["--exact".into(), "player::tests::startup_exit_fixture".into(),
+            "--skip".into(), format!("mjc-exit-code={code}"), "--quiet".into()];
+        let failed_args = fixture_args(STATUS_DLL_INIT_FAILED);
+        let mpv_args = vec!["--no-config".into(), "--load-scripts=no".into(), "--idle=yes".into(),
+            "--vo=null".into(), "--ao=null".into(), format!("--input-ipc-server={pipe_path}")];
+        let mut attempts = 0;
+        let (process, mut file) = connect_player_process(&pipe_path, Duration::from_secs(3), || {
+            attempts += 1;
+            unsafe {
+                if attempts == 1 { spawn_hosted_tracked(&fixture, &failed_args, cwd) }
+                else { spawn_hosted_tracked(&mpv, &mpv_args, mpv.parent().unwrap()) }
+            }
+        }).unwrap();
+        assert_eq!(attempts, 2, "a transient DLL initialization failure must recover once");
+        assert_ne!(unsafe { GetErrorMode() } & SEM_FAILCRITICALERRORS, 0);
+        write_json(&mut file, &json!({"command": ["quit"]})).unwrap();
+        unsafe { WaitForSingleObject(process.handle, 3000); }
+        if process.exit_code().is_none() { process.terminate(); }
+
+        for (code, expected_attempts) in [(7, 1), (STATUS_DLL_INIT_FAILED, 2)] {
+            let args = fixture_args(code);
+            let mut attempts = 0;
+            let start = Instant::now();
+            let error = connect_player_process(&pipe_path, Duration::from_secs(3), || {
+                attempts += 1;
+                unsafe { spawn_hosted_tracked(&fixture, &args, cwd) }
+            }).err().expect("fixture child must fail before IPC connects");
+            assert_eq!(attempts, expected_attempts);
+            assert!(error.contains(&format!("0x{code:08X}")));
+            assert!(start.elapsed() < Duration::from_secs(2), "exit detection must not wait for IPC timeout");
+        }
+    }
+
+    #[test]
+    fn startup_timeout_terminates_the_owned_process() {
+        let mpv = mpv_exe_path().expect("bundled mpv");
+        let args = vec!["--no-config".into(), "--load-scripts=no".into(), "--vo=null".into(), "--idle=yes".into()];
+        let pipe_path = format!("\\\\.\\pipe\\mjc-no-ipc-{}", std::process::id());
+        let mut pid = 0;
+        let error = connect_player_process(&pipe_path, Duration::from_millis(250), || {
+            let process = unsafe { spawn_hosted_tracked(&mpv, &args, mpv.parent().unwrap()) }?;
+            pid = process.pid;
+            Ok(process)
+        }).err().expect("fixture intentionally has no IPC server");
+        assert!(error.contains("启动超时"));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while pid_alive(pid) && Instant::now() < deadline { std::thread::sleep(Duration::from_millis(20)); }
+        assert!(!pid_alive(pid), "a timed-out startup must not leave mpv running");
+    }
 
     #[test]
     fn keyboard_keys_and_video_ratio_follow_native_input() {

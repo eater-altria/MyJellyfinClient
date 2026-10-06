@@ -1,12 +1,10 @@
 -- mjc-osc.lua — SenPlayer-style on-screen controller for MyJellyfinClient
--- Bottom floating bar: prev / play-pause / next / time / seekbar / duration /
--- speed / subtitles / audio / volume / fullscreen / more.
--- Top: centered title, network speed + mute. Pause pill. Auto-hides.
+-- White icon controls over translucent video surfaces; labels appear on hover.
+-- Keep logical sizing stable and reflow only when the window becomes narrow.
 
 local assdraw = require('mp.assdraw')
 local utils = require('mp.utils')
 
-local ACCENT = { 0.04, 0.52, 1.0 }         -- #0a84ff
 local FONT = 'Microsoft YaHei'
 
 local state = {
@@ -23,7 +21,7 @@ local state = {
     forward_seconds = 15,
     precise_seek = false,
     settings = {
-        autoLockOnPause = true, autoHideControlsSeconds = 3,
+        autoHideControlsSeconds = 3,
         showSkipButtons = false, showSwitchMediaButton = true,
         showScreenshotButton = true, showPlayTitleToast = true,
         longPressLeftRate = 0.5, longPressRightRate = 2,
@@ -33,7 +31,6 @@ local state = {
         subtitleSearchHistory = true, rememberAudioTrack = true,
         rememberSubtitle = true, matchWindowToVideoRatio = true, audioBoost = true,
     },
-    locked = false,
     held_key = nil,
     volume_key = nil,
     pending_click = nil,
@@ -251,25 +248,86 @@ local function draw_menu_icon(a, cx, cy, s, color)
     a:pos(0, 0)
     a:append('{\\an7\\p4\\c' .. color .. '\\bord0}')
     for i = -1, 1 do
-        sub_rrect(a, cx - s * 0.5, cy + i * s * 0.34 - s * 0.07,
-            cx + s * 0.5, cy + i * s * 0.34 + s * 0.07, s * 0.07)
+        sub_rrect(a, cx + i * s * 0.45 - s * 0.09, cy - s * 0.09,
+            cx + i * s * 0.45 + s * 0.09, cy + s * 0.09, s * 0.09)
     end
     a:append('{\\p0}')
 end
 
-local function draw_camera_icon(a, cx, cy, s, color)
-    a:new_event()
-    a:pos(0, 0)
+local function draw_switch_icon(a, cx, cy, s, color, direction)
+    a:new_event(); a:pos(0, 0)
     a:append('{\\an7\\p4\\c' .. color .. '\\bord0}')
-    sub_rrect(a, cx - s * 0.6, cy - s * 0.32, cx + s * 0.6, cy + s * 0.5, s * 0.16)
-    sub_rrect(a, cx - s * 0.22, cy - s * 0.55, cx + s * 0.22, cy - s * 0.30, s * 0.08)
+    a:move_to(cx - direction * s * 0.35, cy - s * 0.5)
+    a:line_to(cx + direction * s * 0.45, cy)
+    a:line_to(cx - direction * s * 0.35, cy + s * 0.5)
+    a:line_to(cx - direction * s * 0.35, cy - s * 0.5)
     a:append('{\\p0}')
-    -- lens (circle ≈ fully rounded square)
-    a:new_event()
-    a:pos(0, 0)
-    a:append('{\\an7\\p4\\c' .. ass_color(0.45, 0, 0, 0) .. '\\bord0}')
-    sub_rrect(a, cx - s * 0.2, cy - s * 0.1, cx + s * 0.2, cy + s * 0.3, s * 0.2)
+    local x = cx + direction * s * 0.65
+    draw_round_rect(a, x - s * 0.06, cy - s * 0.5, x + s * 0.06, cy + s * 0.5, s * 0.06, color)
+end
+
+local function draw_surface(a, x0, y0, x1, y1, radius, scale)
+    draw_round_rect(a, x0 - 3 * scale, y0 + 4 * scale, x1 + 3 * scale, y1 + 5 * scale,
+        radius + 3 * scale, ass_color(0.10, 0, 0, 0))
+    draw_round_rect(a, x0, y0, x1, y1, radius, ass_color(0.12, 1, 1, 1))
+    draw_round_rect(a, x0 + scale, y0 + scale, x1 - scale, y1 - scale, radius - scale,
+        ass_color(0.58, 0.035, 0.035, 0.035))
+end
+
+local function draw_ring(a, cx, cy, radius, thickness, color)
+    a:new_event(); a:pos(0, 0)
+    a:append('{\\an7\\p4\\c' .. color .. '\\bord0}')
+    for _, r in ipairs({radius, radius - thickness}) do
+        for i = 0, 40 do
+            local angle = (r == radius and i or 40 - i) * math.pi / 20
+            local x, y = cx + math.cos(angle) * r, cy + math.sin(angle) * r
+            if i == 0 then a:move_to(x, y) else a:line_to(x, y) end
+        end
+    end
     a:append('{\\p0}')
+end
+
+local function draw_line(a, x0, y0, x1, y1, thickness, color)
+    local length = math.sqrt((x1 - x0)^2 + (y1 - y0)^2)
+    if length == 0 then return end
+    local dx, dy = -(y1 - y0) / length * thickness / 2, (x1 - x0) / length * thickness / 2
+    a:new_event(); a:pos(0, 0)
+    a:append('{\\an7\\p4\\c' .. color .. '\\bord0}')
+    a:move_to(x0 + dx, y0 + dy); a:line_to(x1 + dx, y1 + dy)
+    a:line_to(x1 - dx, y1 - dy); a:line_to(x0 - dx, y0 - dy)
+    a:line_to(x0 + dx, y0 + dy); a:append('{\\p0}')
+end
+
+local function draw_context_icon(a, id, cx, cy, scale, color)
+    draw_ring(a, cx, cy, 10 * scale, 1.3 * scale, color)
+    if id == 'audio' then
+        for i = -1, 1 do
+            local height = (i == 0 and 6 or 3) * scale
+            draw_round_rect(a, cx + i * 3 * scale - 0.7 * scale, cy - height,
+                cx + i * 3 * scale + 0.7 * scale, cy + height, 0.7 * scale, color)
+        end
+    elseif id == 'sub' then
+        for i = -1, 1 do
+            draw_round_rect(a, cx - (i == 1 and 3 or 5) * scale, cy + i * 3 * scale - 0.6 * scale,
+                cx + 5 * scale, cy + i * 3 * scale + 0.6 * scale, 0.6 * scale, color)
+        end
+    elseif id == 'speed' then
+        draw_line(a, cx, cy + 2 * scale, cx + 4 * scale, cy - 4 * scale, 1.6 * scale, color)
+        draw_round_rect(a, cx - scale, cy + scale, cx + scale, cy + 3 * scale, scale, color)
+    elseif id == 'vol' then draw_vol_icon(a, cx, cy, 8 * scale, color, state.mute)
+    elseif id == 'more' then draw_menu_icon(a, cx, cy, 11 * scale, color)
+    end
+end
+
+local function draw_camera_icon(a, cx, cy, s, color)
+    local thickness = s * 0.085
+    local points = {{-0.6,-0.3},{-0.25,-0.3},{-0.15,-0.5},{0.2,-0.5},{0.3,-0.3},
+        {0.6,-0.3},{0.6,0.4},{-0.6,0.4},{-0.6,-0.3}}
+    for i = 1, #points - 1 do
+        draw_line(a, cx + points[i][1] * s, cy + points[i][2] * s,
+            cx + points[i+1][1] * s, cy + points[i+1][2] * s, thickness, color)
+    end
+    draw_ring(a, cx, cy + 0.06 * s, s * 0.22, thickness, color)
 end
 
 -- ---------- overlays ----------
@@ -298,7 +356,7 @@ local function update_ov_size()
     if not res_logged then
         res_logged = true
         local gw, gh = mp.get_osd_size()
-        mp.msg.info('mjc-osc v4 res=' .. tostring(w) .. 'x' .. tostring(h) ..
+        mp.msg.info('mjc-osc v5 res=' .. tostring(w) .. 'x' .. tostring(h) ..
             ' get_osd_size=' .. tostring(gw) .. 'x' .. tostring(gh))
     end
     if w ~= ov_w or h ~= ov_h then
@@ -330,8 +388,7 @@ local function publish_cursor_zones()
     local zones = {}
     local function append(source)
         for _, z in ipairs(source) do
-            local enabled = not state.locked or z.name == 'unlock' or z.name == 'playpause'
-            if enabled and z.name ~= 'info-panel' then
+            if z.name ~= 'info-panel' then
                 zones[#zones + 1] = { x0 = z.x0, y0 = z.y0, x1 = z.x1, y1 = z.y1,
                     cursor = z.name == 'sub-search' and 'text' or 'pointer' }
             end
@@ -430,10 +487,10 @@ local function render_info()
     local pw, ph = math.min(840 * scale, w - 24 * scale), math.min(530 * scale, h - 24 * scale)
     local x, y = (w - pw) / 2, (h - ph) / 2
     local a = new_ass()
-    local fg = ass_color(1, 0.95, 0.96, 0.98)
-    local dim = ass_color(1, 0.58, 0.62, 0.69)
-    draw_round_rect(a, 0, 0, w, h, 0, ass_color(0.55, 0, 0, 0))
-    draw_round_rect(a, x, y, x + pw, y + ph, 18 * scale, ass_color(0.98, 0.08, 0.09, 0.12))
+    local fg = ass_color(0.98, 1, 1, 1)
+    local dim = ass_color(0.65, 1, 1, 1)
+    draw_round_rect(a, 0, 0, w, h, 0, ass_color(0.25, 0, 0, 0))
+    draw_surface(a, x, y, x + pw, y + ph, 18 * scale, scale)
     draw_text(a, x + 28 * scale, y + 22 * scale, 21 * scale, fg, '媒体信息')
     draw_text(a, x + pw - 28 * scale, y + 24 * scale, 15 * scale, dim, '关闭 ×', 9)
     zone(state.info_zones, x + pw - 115 * scale, y + 10 * scale, x + pw - 12 * scale, y + 60 * scale,
@@ -499,7 +556,7 @@ local function render_info()
     local column_width = (pw - (2 * 20 + (#lists - 1) * 16) * scale) / #lists
     for col, rows in ipairs(lists) do
         local cx = x + 20 * scale + (col - 1) * (column_width + 16 * scale)
-        draw_round_rect(a, cx, top, cx + column_width, bottom, 12 * scale, ass_color(1, 0.12, 0.14, 0.18))
+        draw_round_rect(a, cx, top, cx + column_width, bottom, 12 * scale, ass_color(0.05, 1, 1, 1))
         if titles[col] then draw_text(a, cx + 12 * scale, top + 10 * scale, 16 * scale, fg, titles[col]) end
         for i = 1, visible do
             local row = rows[state.info_offset + i]
@@ -532,177 +589,162 @@ end
 -- ---------- render bar ----------
 function render_bar()
     update_ov_size()
-    local w, h = state.osd_w, state.osd_h
-    local scale = state.ui_scale
+    local w, h, scale = state.osd_w, state.osd_h, state.ui_scale
     local a = new_ass()
-    state.zones = {}
-    state.menu_anchors = {}
-
-    local show_full = state.visible or state.persistent
+    state.zones, state.menu_anchors, state.seek, state.bar_bounds = {}, {}, nil, nil
     local has_video = state.duration > 0
-
-    -- slim progress line when bar hidden
+    local show_full = state.visible or state.persistent
+    local mx, my = mouse_pos()
+    local fg, dim = ass_color(0.98, 1, 1, 1), ass_color(0.72, 1, 1, 1)
     if not show_full and has_video then
-        local pct = clamp(state.timepos / state.duration, 0, 1)
-        draw_round_rect(a, 0, h - 2, w, h, 0, ass_color(0.25, 1, 1, 1))
-        draw_round_rect(a, 0, h - 2, w * pct, h, 0, ass_color(0.95, ACCENT[1], ACCENT[2], ACCENT[3]))
+        draw_round_rect(a, 0, h - scale, w, h, 0, ass_color(0.16, 1, 1, 1))
+        draw_round_rect(a, 0, h - scale, w * clamp(state.timepos / state.duration, 0, 1), h, 0, ass_color(0.7, 1, 1, 1))
     end
-
-    -- pause pill (top-right, always when paused)
     if state.paused and has_video then
-        local pw, ph = 88 * scale, 30 * scale
-        local px, py = w - pw - 14 * scale, 14 * scale
-        draw_round_rect(a, px, py, px + pw, py + ph, ph / 2, ass_color(0.55, 0.08, 0.08, 0.10))
-        draw_pause_icon(a, px + ph * 0.62, py + ph / 2, 11 * scale, ass_color(0.95, 1, 1, 1))
-        draw_text(a, px + ph * 1.05, py + ph * 0.22, 12 * scale, ass_color(0.95, 1, 1, 1), '暂停')
+        local px, py = w - 102 * scale, 16 * scale
+        draw_surface(a, px, py, w - 16 * scale, py + 32 * scale, 10 * scale, scale)
+        draw_pause_icon(a, px + 20 * scale, py + 16 * scale, 11 * scale, fg)
+        draw_text(a, px + 36 * scale, py + 6 * scale, 12 * scale, fg, '已暂停')
     end
-
     if show_full and has_video then
-        local m = 12 * scale
-        local compact = w < 960 * scale
-        local narrow = w < 640 * scale
-        local tiny = w < 440 * scale
-        state.narrow_controls, state.tiny_controls = narrow, tiny
+        local compact, tiny = w < 640 * scale, w < 440 * scale
+        state.narrow_controls, state.tiny_controls = tiny, tiny
         local bh = (compact and 88 or 52) * scale
-        local by = h - m - bh
+        local by, pad, bw = h - bh, 12 * scale, 34 * scale
+        local row_y = by + (compact and 36 or 0) * scale
+        local row_h, cy = 52 * scale, row_y + 26 * scale
         state.bar_top = by
-        local bx0, bx1 = m, w - m
-        draw_round_rect(a, bx0, by, bx1, by + bh, 14 * scale, ass_color(0.62, 0.05, 0.05, 0.07))
-        draw_round_rect(a, bx0, by, bx1, by + 1, 0, ass_color(0.12, 1, 1, 1))
-
-        local row_y = by + (compact and 36 * scale or 0)
-        local row_h = 52 * scale
-        local cy = row_y + row_h / 2
-        local x = bx0 + 14 * scale
-        local bs = 22 * scale
-        local bw = 34 * scale
-        local fg = ass_color(0.95, 1, 1, 1)
-        local fg_dim = ass_color(0.75, 1, 1, 1)
-
-        if state.settings.showSwitchMediaButton and not tiny then
-            draw_text(a, x + bw / 2, cy - 14 * scale, 14 * scale, fg, '|‹', 8)
-            zone(state.zones, x, row_y, x + bw, row_y + row_h,
-                function() cmd('script-message', 'mjc-switch-media', 'prev') end, 'prev')
-            x = x + bw
-        end
-        if state.settings.showSkipButtons and not tiny then
-            draw_seek_icon(a, x + bw / 2, cy, bs * 0.75, fg, -1)
-            zone(state.zones, x, row_y, x + bw, row_y + row_h, function() cmd('seek', -state.rewind_seconds, state.precise_seek and 'relative+exact' or 'relative+keyframes') end, 'rewind')
-            x = x + bw
-        end
-        -- play / pause
-        if state.paused then
-            draw_play_icon(a, x + bw / 2, cy, bs * 0.8, fg)
-        else
-            draw_pause_icon(a, x + bw / 2, cy, bs * 0.8, fg)
-        end
-        zone(state.zones, x, row_y, x + bw, row_y + row_h, toggle_pause, 'playpause')
-        x = x + bw
-        if state.settings.showSkipButtons and not tiny then
-            draw_seek_icon(a, x + bw / 2, cy, bs * 0.75, fg, 1)
-            zone(state.zones, x, row_y, x + bw, row_y + row_h, function() cmd('seek', state.forward_seconds, state.precise_seek and 'relative+exact' or 'relative+keyframes') end, 'forward')
-            x = x + bw
-        end
-        if state.settings.showSwitchMediaButton and not tiny then
-            draw_text(a, x + bw / 2, cy - 14 * scale, 14 * scale, fg, '›|', 8)
-            zone(state.zones, x, row_y, x + bw, row_y + row_h,
-                function() cmd('script-message', 'mjc-switch-media', 'next') end, 'next')
-            x = x + bw
-        end
-        x = x + 8 * scale
-
-        -- current time
-        local tfs = 14 * scale
-        local cur_t = fmt_time(state.timepos)
-        local tot_t = fmt_time(state.duration)
-        local time_cy = compact and by + 18 * scale or cy
-        if compact then x = bx0 + 14 * scale end
-        draw_text(a, x, time_cy - tfs * 0.75, tfs, fg, cur_t)
-        x = x + text_width(cur_t, tfs) + 12 * scale
-
-        -- right-side buttons (computed right to left)
-        local rx = bx1 - 10 * scale
-        local slots = {}
-        local function rbtn(label, id, vw)
-            vw = vw or bw
-            rx = rx - vw
-            slots[#slots + 1] = { id = id, x = rx, w = vw, label = label }
-            rx = rx - 4 * scale
-        end
-        rbtn('more', 'more')
-        rbtn('fs', 'fs')
-        if state.settings.showScreenshotButton and not narrow then rbtn('camera', 'screenshot') end
-        rbtn('vol', 'vol')
-        if not narrow then
-            rbtn('音轨', 'audio', text_width('音轨', tfs) + 16 * scale)
-            rbtn('字幕', 'sub', text_width('字幕', tfs) + 16 * scale)
-        end
-        local spd_label = (string.format('%.2f', state.speed):gsub('0+$', ''):gsub('%.$', '.0')) .. 'x'
-        if not narrow then rbtn(spd_label, 'speed', text_width(spd_label, tfs) + 16 * scale) end
-
-        -- seekbar occupies [x, rx]
-        local sx0, sx1 = x, (compact and bx1 - 14 * scale or rx) - text_width(tot_t, tfs) - 24 * scale
-        local shy = 4 * scale
-        local shy0 = time_cy - shy / 2
-        state.seek = { x0 = sx0, y0 = shy0, x1 = sx1, y1 = shy0 + shy }
-        zone(state.zones, sx0 - 4, compact and by or row_y, sx1 + 4, compact and by + 36 * scale or row_y + row_h, function() end, 'seek')
-        draw_round_rect(a, sx0, shy0, sx1, shy0 + shy, shy / 2, ass_color(0.35, 1, 1, 1))
-        local pct = state.duration > 0 and clamp(state.timepos / state.duration, 0, 1) or 0
-        if pct > 0 then
-            draw_round_rect(a, sx0, shy0, sx0 + (sx1 - sx0) * pct, shy0 + shy, shy / 2,
-                ass_color(0.98, ACCENT[1], ACCENT[2], ACCENT[3]))
-        end
-        if state.seek_drag then
-            local kx = sx0 + (sx1 - sx0) * pct
-            draw_round_rect(a, kx - 3 * scale, time_cy - 6 * scale, kx + 3 * scale, time_cy + 6 * scale, 3 * scale, fg)
-        end
-
-        -- total time
-        local tx = sx1 + 12 * scale
-        draw_text(a, tx, time_cy - tfs * 0.75, tfs, fg_dim, tot_t)
-
-        -- render right buttons
-        for _, s in ipairs(slots) do
-            local cx = s.x + s.w / 2
-            state.menu_anchors[s.id] = cx
-            if s.id == 'more' then
-                draw_menu_icon(a, cx, cy, bs * 0.7, fg)
-            elseif s.id == 'fs' then
-                draw_fs_icon(a, cx, cy, bs * 0.42, fg)
-            elseif s.id == 'vol' then
-                draw_vol_icon(a, cx, cy, bs * 0.55, fg, state.mute)
-            elseif s.id == 'screenshot' then
-                draw_camera_icon(a, cx, cy, bs * 0.7, fg)
-            else
-                draw_text(a, s.x + 8 * scale, cy - tfs * 0.75, tfs, fg, s.label)
+        state.bar_bounds = {x0 = 0, y0 = by, x1 = w, y1 = h}
+        -- Separate opacities make the surface and the timeline read as distinct layers.
+        draw_round_rect(a, 0, by, w, h, 10 * scale, ass_color(0.08, 1, 1, 1))
+        draw_round_rect(a, scale, by + scale, w - scale, h, 9 * scale, ass_color(0.42, 0, 0, 0))
+        draw_round_rect(a, 10 * scale, by, w - 10 * scale, by + scale, 0, ass_color(0.10, 1, 1, 1))
+        local tooltip, tooltip_x
+        local function feedback(x, y, width, height, label, selected)
+            local hovered = not state.menu and not state.info_visible and mx >= x and mx <= x + width and my >= y and my <= y + height
+            if hovered or selected then
+                draw_round_rect(a, x + 2 * scale, y + (height - 32 * scale) / 2,
+                    x + width - 2 * scale, y + (height + 32 * scale) / 2, 8 * scale,
+                    ass_color(hovered and 0.14 or 0.08, 1, 1, 1))
             end
-            local act = s.id
-            zone(state.zones, s.x - 2, row_y, s.x + s.w + 2, row_y + row_h, function()
-                if act == 'more' then
-                    toggle_menu('more')
-                elseif act == 'fs' then
-                    do_fullscreen()
-                elseif act == 'vol' then
-                    cmd('cycle', 'mute')
-                elseif act == 'screenshot' then
-                    do_screenshot()
-                elseif act == 'speed' then
-                    toggle_menu('speed')
-                elseif act == 'sub' then
-                    toggle_menu('sub')
-                    state.sub_searching = false
-                elseif act == 'audio' then
-                    toggle_menu('audio')
+            if hovered then tooltip, tooltip_x = label, x + width / 2 end
+        end
+        local x = pad
+        local function transport(id, label, action, draw)
+            feedback(x, row_y, bw, row_h, label)
+            draw(x + bw / 2, cy, fg)
+            zone(state.zones, x, row_y, x + bw, row_y + row_h, action, id)
+            x = x + bw
+        end
+        if state.settings.showSwitchMediaButton and not tiny then
+            transport('prev', '上一项媒体', function() cmd('script-message', 'mjc-switch-media', 'prev') end,
+                function(cx, y, col) draw_switch_icon(a, cx, y, 16 * scale, col, -1) end)
+        end
+        if state.settings.showSkipButtons and not tiny then
+            transport('rewind', '快退 ' .. state.rewind_seconds .. ' 秒', function()
+                cmd('seek', -state.rewind_seconds, state.precise_seek and 'relative+exact' or 'relative+keyframes') end,
+                function(cx, y, col) draw_seek_icon(a, cx, y, 13 * scale, col, -1) end)
+        end
+        transport('playpause', state.paused and '播放 · 空格' or '暂停 · 空格', toggle_pause,
+            function(cx, y, col)
+                if state.paused then draw_play_icon(a, cx, y, 20 * scale, col)
+                else draw_pause_icon(a, cx, y, 17 * scale, col) end
+            end)
+        if state.settings.showSkipButtons and not tiny then
+            transport('forward', '快进 ' .. state.forward_seconds .. ' 秒', function()
+                cmd('seek', state.forward_seconds, state.precise_seek and 'relative+exact' or 'relative+keyframes') end,
+                function(cx, y, col) draw_seek_icon(a, cx, y, 13 * scale, col, 1) end)
+        end
+        if state.settings.showSwitchMediaButton and not tiny then
+            transport('next', '下一项媒体', function() cmd('script-message', 'mjc-switch-media', 'next') end,
+                function(cx, y, col) draw_switch_icon(a, cx, y, 16 * scale, col, 1) end)
+        end
+        local rx, slots = w - pad, {}
+        local function rbtn(id, label)
+            rx = rx - bw
+            slots[#slots + 1] = {id = id, x = rx, label = label}
+        end
+        rbtn('more', '更多')
+        rbtn('fs', '全屏 · 回车')
+        rbtn('vol', state.mute and '取消静音 · M' or '音量 ' .. math.floor(state.volume) .. '% · M 静音')
+        if not tiny then
+            rbtn('speed', '倍速 ' .. tostring(state.speed) .. 'x')
+            rbtn('sub', '字幕 · S')
+            rbtn('audio', '音轨 · A')
+        end
+        for _, slot in ipairs(slots) do
+            local id, cx = slot.id, slot.x + bw / 2
+            local color = fg
+            feedback(slot.x, row_y, bw, row_h, slot.label, state.menu == id or (id == 'vol' and state.mute))
+            state.menu_anchors[id] = cx
+            if id == 'fs' then draw_fs_icon(a, cx, cy, 8 * scale, color)
+            else draw_context_icon(a, id, cx, cy, scale, color) end
+            zone(state.zones, slot.x, row_y, slot.x + bw, row_y + row_h, function()
+                if id == 'fs' then do_fullscreen()
+                elseif id == 'vol' then cmd('cycle', 'mute')
+                else toggle_menu(id); state.sub_searching = false; state.menu_offset = 0 end
+                render_all()
+            end, id)
+        end
+        local fs = 14 * scale
+        local ty = compact and by + 19 * scale or cy
+        local cur_t, tot_t = fmt_time(state.timepos), fmt_time(state.duration)
+        local tx = compact and pad or x + 10 * scale
+        local sx0 = tx + text_width(cur_t, fs) + 18 * scale
+        local sx1 = (compact and w - pad or rx - 10 * scale) - text_width(tot_t, fs) - 18 * scale
+        local sy0, sy1 = compact and by + 4 * scale or row_y, compact and by + 34 * scale or row_y + row_h
+        local hovered_seek = not state.menu and not state.info_visible
+            and mx >= sx0 - 4 * scale and mx <= sx1 + 4 * scale and my >= sy0 and my <= sy1
+        local sh = (hovered_seek or state.seek_drag) and 4 * scale or 3 * scale
+        state.seek = {x0 = sx0, y0 = ty - sh / 2, x1 = sx1, y1 = ty + sh / 2}
+        zone(state.zones, sx0 - 4 * scale, sy0, sx1 + 4 * scale, sy1, function() end, 'seek')
+        draw_text(a, tx, ty - 11 * scale, fs, fg, cur_t)
+        draw_text(a, sx1 + 18 * scale, ty - 11 * scale, fs, fg, tot_t)
+        draw_round_rect(a, sx0, ty - sh / 2, sx1, ty + sh / 2, sh / 2, ass_color(0.30, 1, 1, 1))
+        local kx = sx0 + (sx1 - sx0) * clamp(state.timepos / state.duration, 0, 1)
+        if kx > sx0 then draw_round_rect(a, sx0, ty - sh / 2, kx, ty + sh / 2, sh / 2, ass_color(0.82, 1, 1, 1)) end
+        draw_round_rect(a, kx - 4 * scale, ty - 4 * scale, kx + 4 * scale, ty + 4 * scale, 4 * scale, fg)
+        if hovered_seek or state.seek_drag then
+            tooltip, tooltip_x = fmt_time(seek_frac_at(mx) * state.duration), clamp(mx, 50 * scale, w - 50 * scale)
+        end
+        if tooltip then
+            local tw = text_width(tooltip, 12 * scale) + 24 * scale
+            local hx = clamp(tooltip_x - tw / 2, 8 * scale, w - 8 * scale - tw)
+            draw_surface(a, hx, by - 40 * scale, hx + tw, by - 8 * scale, 8 * scale, scale)
+            draw_text(a, hx + tw / 2, by - 34 * scale, 12 * scale, fg, tooltip, 8)
+        end
+        -- Secondary tools float beside the picture, as in the visual reference.
+        if not compact and h >= 320 * scale then
+            local rail_x, rail_y = w - 48 * scale, h / 2 - 38 * scale
+            local tool_h = state.settings.showScreenshotButton and 76 * scale or 38 * scale
+            draw_surface(a, rail_x, rail_y, rail_x + 36 * scale, rail_y + tool_h, 10 * scale, scale)
+            local tools = state.settings.showScreenshotButton and {'screenshot', 'info'} or {'info'}
+            for i, id in ipairs(tools) do
+                local y = rail_y + (i - 1) * 38 * scale
+                local hovered = not state.menu and not state.info_visible
+                    and mx >= rail_x and mx <= rail_x + 36 * scale and my >= y and my <= y + 38 * scale
+                if hovered then
+                    draw_round_rect(a, rail_x + 2 * scale, y + 2 * scale, rail_x + 34 * scale, y + 36 * scale,
+                        8 * scale, ass_color(0.12, 1, 1, 1))
+                    local label = id == 'screenshot' and '截图' or '媒体信息'
+                    local tw = text_width(label, 12 * scale) + 20 * scale
+                    draw_surface(a, rail_x - tw - 8 * scale, y + 3 * scale, rail_x - 8 * scale, y + 35 * scale, 8 * scale, scale)
+                    draw_text(a, rail_x - tw / 2 - 8 * scale, y + 9 * scale, 12 * scale, fg, label, 8)
                 end
-                state.menu_offset = 0
-                render_menu()
-            end, act)
+                local col = fg
+                if id == 'screenshot' then draw_camera_icon(a, rail_x + 18 * scale, y + 19 * scale, 16 * scale, col)
+                else
+                    for j = -1, 1 do
+                        draw_round_rect(a, rail_x + 11 * scale, y + 19 * scale + j * 5 * scale,
+                            rail_x + 25 * scale, y + 20.4 * scale + j * 5 * scale, 0.7 * scale, col)
+                    end
+                end
+                zone(state.zones, rail_x, y, rail_x + 36 * scale, y + 38 * scale,
+                    id == 'screenshot' and do_screenshot or show_media_info, id)
+            end
         end
     end
-
-    bar_ov.data = a.text
-    bar_ov:update()
-    publish_cursor_zones()
+    bar_ov.data = a.text; bar_ov:update(); publish_cursor_zones()
 end
 
 -- ---------- top bar ----------
@@ -714,25 +756,24 @@ function render_top()
     state.top_zones = {}
     -- Window controls own playback exit; the OSD only contains playback controls.
     if state.visible or state.duration <= 0 then
-        local th = 56 * scale
-        draw_round_rect(a, 0, 0, w, th, 0, ass_color(0.35, 0, 0, 0))
-        if state.locked then
-            draw_text(a, 16 * scale, 12 * scale, 13 * scale,
-                ass_color(0.96, 1, 1, 1), '控件已锁定 · 解锁')
-            zone(state.top_zones, 0, 0, 210 * scale, th,
-                function() state.locked = false; render_all() end, 'unlock')
+        local m, th = 20 * scale, 54 * scale
+        for i = 0, 7 do
+            draw_round_rect(a, 0, i * 10 * scale, w, (i + 1) * 10 * scale, 0,
+                ass_color(0.28 - i * 0.035, 0, 0, 0))
+        end
+        local sp = fmt_kbs(state.cache_kbs)
+        local reserved = state.paused and 110 * scale or 0
+        if sp ~= '' and not state.paused and w > 560 * scale then
+            reserved = text_width(sp, 12 * scale) + 26 * scale
+            draw_round_rect(a, w - m - reserved, m, w - m, m + 30 * scale, 15 * scale,
+                ass_color(0.66, 0.08, 0.08, 0.10))
+            draw_text(a, w - m - 13 * scale, m + 5 * scale, 12 * scale,
+                ass_color(0.62, 1, 1, 1), sp, 9)
         end
         local tfs = 14 * scale
-        local title_width = w - (state.locked and 470 or 240) * scale
-        if title_width > 70 * scale then draw_text(a, w / 2, 12 * scale, tfs, ass_color(0.96, 1, 1, 1), fit_text(state.title, tfs, title_width), 8) end
-        local sp = fmt_kbs(state.cache_kbs)
-        local rx = w - 16 * scale
-        if sp ~= '' then
-            local tw = text_width(sp, 11 * scale)
-            draw_text(a, rx - tw, 14 * scale, 11 * scale, ass_color(0.85, 1, 1, 1), sp)
-            rx = rx - tw - 16 * scale
-        end
-        draw_vol_icon(a, rx - 8 * scale, 20 * scale, 11 * scale, ass_color(0.9, 1, 1, 1), state.mute)
+        local title_width = w - 2 * m - 2 * reserved - 16 * scale
+        if title_width > 0 then draw_text(a, w / 2, m + 1 * scale, tfs,
+            ass_color(0.96, 1, 1, 1), fit_text(state.title, tfs, title_width), 8) end
     end
 
     top_ov.data = a.text
@@ -884,6 +925,7 @@ function render_menu()
 
         if #items > 0 then
             -- Keep long track lists on-screen and allow mouse-wheel pagination.
+            local total_items = #items
             local max_rows = math.max(1, math.floor((bar_top - 34 * scale) / row_h))
             state.menu_offset = clamp(state.menu_offset, 0, math.max(0, #items - max_rows))
             if #items > max_rows then
@@ -902,16 +944,29 @@ function render_menu()
             local anchor = state.menu_anchors[state.menu] or state.menu_anchors.more or (w - m - pw / 2)
             local px = clamp(anchor - pw / 2, m, w - m - pw)
             local py = bar_top - 10 * scale - ph
-            draw_round_rect(a, px, py, px + pw, py + ph, 12 * scale, ass_color(0.78, 0.07, 0.07, 0.09))
-            draw_round_rect(a, px, py, px + pw, py + 1, 0, ass_color(0.14, 1, 1, 1))
+            draw_surface(a, px, py, px + pw, py + ph, 14 * scale, scale)
+            if total_items > #items then
+                local track_h = ph - 16 * scale
+                local thumb_h = math.max(12 * scale, track_h * #items / total_items)
+                local thumb_y = py + 8 * scale + (track_h - thumb_h) * state.menu_offset / (total_items - #items)
+                draw_round_rect(a, px + pw - 5 * scale, py + 8 * scale, px + pw - 3 * scale,
+                    py + ph - 8 * scale, scale, ass_color(0.08, 1, 1, 1))
+                draw_round_rect(a, px + pw - 5 * scale, thumb_y, px + pw - 3 * scale,
+                    thumb_y + thumb_h, scale, ass_color(0.38, 1, 1, 1))
+            end
 
             local iy = py + 6 * scale
+            local mx, my = mouse_pos()
             for _, it in ipairs(items) do
                 if it.header then
                     draw_text(a, px + 14 * scale, iy + row_h * 0.22, fs * 0.9,
                         ass_color(0.6, 1, 1, 1), it.label)
                 else
-                    local col = it.current and ass_color(0.98, ACCENT[1], ACCENT[2], ACCENT[3])
+                    if it.current or (mx >= px and mx <= px + pw and my >= iy and my <= iy + row_h) then
+                        draw_round_rect(a, px + 6 * scale, iy + 2 * scale, px + pw - 6 * scale, iy + row_h - 2 * scale,
+                            8 * scale, it.current and ass_color(0.12, 1, 1, 1) or ass_color(0.07, 1, 1, 1))
+                    end
+                    local col = it.current and ass_color(1, 1, 1, 1)
                         or ass_color(0.92, 1, 1, 1)
                     draw_text(a, px + 14 * scale, iy + row_h * 0.2, fs, col, fit_text(it.label, fs, pw - 28 * scale))
                     local act = it.action
@@ -1039,9 +1094,7 @@ mp.observe_property('duration', 'number', function(_, v)
 end)
 mp.observe_property('pause', 'bool', function(_, v)
     state.paused = v or false
-    state.locked = state.paused and state.settings.autoLockOnPause or false
-    if state.locked then
-        state.menu = nil; state.sub_searching = false; state.seek_drag = false; state.pending_click = nil
+    if state.paused then
         if state.held_key and state.held_key.active then set_speed(state.held_key.previous_speed) end
         state.held_key = nil; state.volume_key = nil
     end
@@ -1052,12 +1105,13 @@ mp.observe_property('speed', 'number', function(_, v)
 end)
 mp.observe_property('volume', 'number', function(_, v)
     state.volume = v or 100
+    render_bar()
 end)
 mp.observe_property('mute', 'bool', function(_, v)
     state.mute = v or false; render_all()
 end)
 mp.observe_property('media-title', 'string', function(_, v)
-    state.title = v or ''; render_top()
+    state.title = state.media_info.title or v or ''; render_top()
 end)
 mp.observe_property('hwdec', 'string', function(_, v)
     state.hwdec = v or 'auto-safe'
@@ -1095,6 +1149,8 @@ end
 mp.observe_property('mouse-pos', 'native', function(_, v)
     if not v then return end
     activity()
+    render_bar()
+    if state.menu then render_menu() end
 end)
 
 local function finish_hold()
@@ -1135,14 +1191,12 @@ local function on_key(key, down)
         local held = state.held_key
         if held and held.key == key then
             finish_hold()
-            if not held.active and not state.locked then relative_seek(key) end
+            if not held.active then relative_seek(key) end
         end
         return
     end
+    if key == 'SPACE' then finish_hold(); state.pending_click = nil; toggle_pause(); return end
     activity()
-    if key == 'SPACE' then toggle_pause(); return end
-    if key == 'K' then state.locked = not state.locked; state.menu = nil; render_all(); return end
-    if state.locked then return end
     if key == 'LEFT' or key == 'RIGHT' then
         if state.held_key and state.held_key.key == key then return end
         finish_hold()
@@ -1170,11 +1224,13 @@ local function on_mbtn_left(event)
         state.pending_click = nil
         activity()
         if state.info_visible then
+            state.block_gesture_until = mp.get_time() + (tonumber(state.settings.doubleClickMilliseconds) or 500) / 1000
             local z = hit(state.info_zones, x, y)
             if z then z.action() else state.info_visible = false; render_all() end
             return
         end
         if state.menu then
+            state.block_gesture_until = mp.get_time() + (tonumber(state.settings.doubleClickMilliseconds) or 500) / 1000
             local z = hit(state.menu_zones, x, y)
             if z then
                 z.action()
@@ -1186,7 +1242,7 @@ local function on_mbtn_left(event)
         end
         local z = hit(state.top_zones, x, y) or hit(state.zones, x, y)
         if z then
-            if state.locked and z.name ~= 'unlock' and z.name ~= 'playpause' then return end
+            state.block_gesture_until = mp.get_time() + (tonumber(state.settings.doubleClickMilliseconds) or 500) / 1000
             if z.name == 'seek' then
                 state.seek_drag = true
                 seek_to_frac(seek_frac_at(x))
@@ -1196,7 +1252,8 @@ local function on_mbtn_left(event)
             end
             return
         end
-        if not state.locked and state.settings.mouseLeftClick == 'playpause' then
+        if state.bar_bounds and hit({state.bar_bounds}, x, y) then return end
+        if state.settings.mouseLeftClick == 'playpause' then
             -- Wait for the double-click interval so a configured double-click is one action.
             state.pending_click = mp.get_time() + clamp(tonumber(state.settings.doubleClickMilliseconds) or 500, 100, 1500) / 1000
         end
@@ -1213,23 +1270,18 @@ mp.register_script_message('mjc-settings', function(json)
     local settings = utils.parse_json(json)
     if type(settings) ~= 'table' then return end
     finish_hold()
-    local was_auto_lock = state.settings.autoLockOnPause
-    for key, value in pairs(settings) do state.settings[key] = value end
+    for key, value in pairs(settings) do
+        if key ~= 'autoLockOnPause' then state.settings[key] = value end
+    end
     state.ui_scale = clamp(tonumber(settings.uiScale) or state.ui_scale, 0.5, 4)
     state.rewind_seconds = clamp(tonumber(settings.rewindSeconds) or state.rewind_seconds, 1, 600)
     state.forward_seconds = clamp(tonumber(settings.forwardSeconds) or state.forward_seconds, 1, 600)
     if settings.preciseSeek ~= nil then state.precise_seek = settings.preciseSeek == true end
-    local color = tostring(settings.accentColor or ''):match('^#(%x%x%x%x%x%x)$')
-    if color then ACCENT = { tonumber(color:sub(1, 2), 16) / 255, tonumber(color:sub(3, 4), 16) / 255, tonumber(color:sub(5, 6), 16) / 255 } end
     if type(settings.subtitleSearchQueries) == 'table' then
         state.sub_history = {}
         for _, value in ipairs(settings.subtitleSearchQueries) do
             if type(value) == 'string' and #state.sub_history < 8 then state.sub_history[#state.sub_history + 1] = value end
         end
-    end
-    if not state.settings.autoLockOnPause then state.locked = false end
-    if not was_auto_lock and state.settings.autoLockOnPause and state.paused then
-        state.locked = true; state.menu = nil; state.sub_searching = false; state.seek_drag = false
     end
     restore_tracks(); render_all()
 end)
@@ -1270,6 +1322,8 @@ end)
 mp.register_script_message('mjc-media-details', function(json)
     state.media_info = utils.parse_json(json) or {}
     if type(state.media_info) ~= 'table' then state.media_info = {} end
+    if type(state.media_info.title) == 'string' then state.title = state.media_info.title end
+    render_top()
     render_info()
 end)
 mp.register_script_message('mjc-double-click', function(mx, my)
@@ -1278,7 +1332,9 @@ mp.register_script_message('mjc-double-click', function(mx, my)
     local x, y = tonumber(mx), tonumber(my)
     if not x or not y then x, y = mouse_pos() end
     if not state.info_visible and not state.menu and not hit(state.top_zones, x, y)
-        and not hit(state.zones, x, y) and not state.locked and state.duration > 0
+        and not hit(state.zones, x, y) and not (state.bar_bounds and hit({state.bar_bounds}, x, y))
+        and mp.get_time() >= (state.block_gesture_until or 0)
+        and state.duration > 0
         and state.settings.mouseLeftDoubleClick == 'playpause' then toggle_pause() end
 end)
 mp.register_script_message('mjc-escape', escape)
@@ -1287,14 +1343,14 @@ mp.register_script_message('mjc-media-info', show_media_info)
 mp.add_forced_key_binding('mbtn_left', 'mjc-osc-mbtn-left', on_mbtn_left, { complex = true })
 
 mp.add_forced_key_binding('mbtn_right', 'mjc-osc-mbtn-right', function()
-    if state.locked or state.settings.mouseRightClick ~= 'toggleControls' then return end
+    if state.settings.mouseRightClick ~= 'toggleControls' then return end
     state.last_active = mp.get_time()
     state.visible = not state.visible
     if not state.visible then state.menu = nil; state.sub_searching = false end
     render_all()
 end)
 
-for _, key in ipairs({'LEFT', 'RIGHT', 'UP', 'DOWN', 'SPACE', 'ENTER', 'ESC', 'F', 'M', 'A', 'S', 'K', 'BS', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'}) do
+for _, key in ipairs({'LEFT', 'RIGHT', 'UP', 'DOWN', 'SPACE', 'ENTER', 'ESC', 'F', 'M', 'A', 'S', 'BS', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'}) do
     local name = key
     mp.add_forced_key_binding(key, 'mjc-key-' .. key, function(event)
         if event.event == 'up' then on_key(name, false)
@@ -1313,7 +1369,6 @@ for _, direction in ipairs({'wheel_up', 'wheel_down'}) do
         if state.info_visible then
             state.info_offset = math.max(0, state.info_offset + delta); render_info(); return
         end
-        if state.locked then return end
         if state.menu then
             state.menu_offset = math.max(0, state.menu_offset + delta); render_menu()
         else
@@ -1327,15 +1382,15 @@ end
 mp.add_periodic_timer(0.03, function()
     if state.pending_click and mp.get_time() >= state.pending_click then
         state.pending_click = nil
-        if not state.locked then toggle_pause() end
+        toggle_pause()
     end
     local held = state.held_key
-    if held and not held.active and mp.get_time() - held.since >= 0.35 and not state.locked then
+    if held and not held.active and mp.get_time() - held.since >= 0.35 then
         held.active = true
         set_speed(clamp(tonumber(held.key == 'LEFT' and state.settings.longPressLeftRate or state.settings.longPressRightRate) or 1, 0.1, 16))
     end
     local volume_key = state.volume_key
-    if volume_key and not state.locked and mp.get_time() - volume_key.since >= 0.35
+    if volume_key and mp.get_time() - volume_key.since >= 0.35
         and mp.get_time() - volume_key.last >= 0.1 then
         volume_key.last = mp.get_time()
         local volume = clamp(state.volume + (volume_key.key == 'UP' and 5 or -5), 0, state.settings.audioBoost and 200 or 100)
@@ -1351,7 +1406,7 @@ end)
 mp.add_periodic_timer(0.25, function()
     if state.info_visible then render_info() end
     if state.visible and not state.persistent and not state.menu and not state.info_visible and not state.seek_drag then
-        if mp.get_time() - state.last_active > (tonumber(state.settings.autoHideControlsSeconds) or 3) then
+        if mp.get_time() - state.last_active >= (tonumber(state.settings.autoHideControlsSeconds) or 3) then
             state.visible = false
             render_all()
         end
@@ -1363,7 +1418,7 @@ mp.register_event('file-loaded', function()
     state.remembered_applied = { audio = false, sub = false }
     state.preferred_applied = {}
     sync_tracks()
-    state.title = mp.get_property('media-title') or ''
+    state.title = state.media_info.title or mp.get_property('media-title') or ''
     state.visible = true
     state.last_active = mp.get_time()
     if state.settings.showPlayTitleToast and state.title ~= '' then mp.osd_message(state.title, 3) end

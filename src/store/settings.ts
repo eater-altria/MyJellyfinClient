@@ -25,7 +25,6 @@ export interface AppSettings {
   simplifyResolution: boolean;
   // 播放
   resumeFromLastPosition: boolean;
-  autoLockOnPause: boolean;
   preciseSeek: boolean;
   rewindSeconds: number;
   forwardSeconds: number;
@@ -80,7 +79,6 @@ const DEFAULTS: AppSettings = {
   showResolution: true,
   simplifyResolution: true,
   resumeFromLastPosition: true,
-  autoLockOnPause: true,
   preciseSeek: false,
   rewindSeconds: 15,
   forwardSeconds: 15,
@@ -117,13 +115,29 @@ interface SettingsState extends AppSettings {
 }
 
 export const useSettings = create<SettingsState>()(
-  persist(
+  persist<SettingsState, [], [], AppSettings>(
     (set) => ({
       ...DEFAULTS,
       set: (key, value) => set({ [key]: value } as Partial<SettingsState>),
       reset: () => set(DEFAULTS),
     }),
-    { name: 'mjc:settings' },
+    {
+      name: 'mjc:settings',
+      version: 2,
+      partialize: ({ set: _set, reset: _reset, ...settings }) => settings,
+      // Adopt the requested 3-second interval once for existing installations.
+      // Later user changes remain configurable and survive subsequent launches.
+      migrate: (persisted, version) => {
+        const previous: Record<string, unknown> = persisted && typeof persisted === 'object' ? { ...persisted } : {};
+        delete previous.autoLockOnPause;
+        return {
+          ...DEFAULTS,
+          ...previous,
+          autoHideControlsSeconds: version < 1 ? 3
+            : typeof previous.autoHideControlsSeconds === 'number' ? previous.autoHideControlsSeconds : 3,
+        };
+      },
+    },
   ),
 );
 

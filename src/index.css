@@ -59,6 +59,182 @@ body {
   cursor: text;
 }
 
+/* Playback is deliberately monochrome; library/settings retain the accent. */
+.player-surface {
+  container-type: inline-size;
+}
+.player-glass-panel {
+  display: grid;
+  grid-template-columns: auto minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 4px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px 10px 0 0;
+  background: rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(10px) saturate(105%);
+}
+.player-timeline {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+.player-transport {
+  display: contents;
+}
+.player-transport-actions {
+  grid-column: 1;
+  grid-row: 1;
+}
+.player-context-actions {
+  grid-column: 3;
+  grid-row: 1;
+}
+.player-control-button {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 40px;
+  border-radius: 8px;
+  color: #fff;
+  transition: background 0.15s;
+}
+.player-control-button:hover,
+.player-control-button[aria-expanded="true"],
+.player-control-button[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.12);
+}
+.player-control-button:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.85);
+  outline-offset: 2px;
+}
+.player-control-button:disabled {
+  opacity: 0.3;
+}
+.player-control-button[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.48);
+  backdrop-filter: blur(10px);
+  color: #fff;
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.player-control-button:not(:disabled):hover::after,
+.player-control-button:focus-visible::after {
+  opacity: 1;
+}
+.player-context-actions .player-control-button:last-child::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+.player-icon-ring {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 21px;
+  height: 21px;
+  border: 1.3px solid rgba(255, 255, 255, 0.95);
+  border-radius: 50%;
+}
+.player-side-tools {
+  position: absolute;
+  z-index: 10;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(10px);
+}
+.player-side-tools .player-control-button::after {
+  bottom: auto;
+  left: auto;
+  right: calc(100% + 10px);
+  transform: none;
+}
+.player-menu-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+}
+.player-menu-field select {
+  width: 176px;
+  min-width: 0;
+  border-radius: 8px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.10);
+  color: #fff;
+}
+.player-menu-field option {
+  background: #303030;
+}
+.player-menu-field select:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.85);
+}
+.player-compact-actions {
+  display: none;
+}
+@container (max-width: 639px) {
+  .player-glass-panel {
+    grid-template-columns: 1fr auto;
+    row-gap: 2px;
+  }
+  .player-timeline {
+    grid-column: 1 / -1;
+    padding: 4px 0;
+  }
+  .player-transport-actions,
+  .player-context-actions {
+    grid-row: 2;
+  }
+  .player-context-actions {
+    grid-column: 2;
+  }
+  .player-side-tools {
+    display: none;
+  }
+}
+@container (max-width: 439px) {
+  .player-secondary-button,
+  .player-track-action {
+    display: none;
+  }
+  .player-compact-actions {
+    display: grid;
+    gap: 4px;
+  }
+  .player-compact-actions button {
+    padding: 8px;
+    border-radius: 8px;
+    text-align: left;
+    font-size: 12px;
+  }
+  .player-compact-actions button:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+}
+
 /* iOS-style toggle */
 .ios-toggle {
   position: relative;

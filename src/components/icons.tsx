@@ -101,6 +101,19 @@ export const IconMinimize = (p: P) => base(p, <path d="M5 12h14" />);
 export const IconClose = (p: P) => base(p, <path d="M6 6l12 12M18 6 6 18" />);
 export const IconMaximize = (p: P) => base(p, <rect x="5" y="5" width="14" height="14" rx="2" />);
 
+export const IconMore = (p: P) => base(p, <>
+  {[5, 12, 19].map(cx => <circle key={cx} cx={cx} cy="12" r="1.5" fill="currentColor" stroke="none" />)}
+</>);
+export const IconCamera = (p: P) => base(p, <>
+  <path d="M8 6l1.5-3h5L16 6h3a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z" />
+  <circle cx="12" cy="12.5" r="3.5" />
+</>);
+export const IconPrevious = (p: P) => base(p, <><path d="M5 5v14" /><path d="m18 5-10 7 10 7Z" fill="currentColor" stroke="none" /></>);
+export const IconNext = (p: P) => base(p, <><path d="M19 5v14" /><path d="m6 5 10 7-10 7Z" fill="currentColor" stroke="none" /></>);
+export const IconPlaybackAudio = (p: P) => base(p, <><circle cx="12" cy="12" r="9" /><path d="M8 9v6m4-9v12m4-9v6" /></>);
+export const IconPlaybackSubtitle = (p: P) => base(p, <><circle cx="12" cy="12" r="9" /><path d="M7.5 9h9m-9 3h9m-6 3h6" /></>);
+export const IconPlaybackSpeed = (p: P) => base(p, <><circle cx="12" cy="12" r="9" /><path d="m12 14 4-6" /><circle cx="12" cy="14" r="1" fill="currentColor" stroke="none" /></>);
+
 export const IconVolume = (p: P) =>
   base(p, <>
     <path d="M11 5 6 9H3v6h3l5 4Z" fill="currentColor" stroke="none" />

@@ -11,12 +11,21 @@ import {
   IconSkipBack,
   IconSkipForward,
   IconVolume,
+  IconPrevious,
+  IconNext,
+  IconCamera,
+  IconMore,
+  IconPlaybackAudio,
+  IconPlaybackSubtitle,
+  IconPlaybackSpeed,
+  IconList,
 } from '../components/icons';
 import { isTauri, windowIsFullscreen, windowSetFullscreen } from '../platform/window';
 import { bindBrowserPlaybackKeys } from '../player/browserKeyboard';
 import { getAdjacentMedia, getPlaybackPreferences, rememberTrack, saveSubtitleSearchQueries } from '../player/playbackPreferences';
 import { preferredTrack } from '../player/trackSelection';
 import { PLAYER_EXIT_EVENT } from '../player/exitPlayback';
+import { mediaTitle, usePlaybackTitle } from '../player/playbackTitle';
 
 const DIRECT_PLAY_CONTAINERS = ['mp4', 'm4v', 'mkv', 'mov', 'webm'];
 
@@ -55,6 +64,21 @@ function SeekBar({
 
   return (
     <div
+      role="slider"
+      aria-label="播放进度"
+      aria-valuemin={0}
+      aria-valuemax={Number.isFinite(duration) && duration > 0 ? duration : 0}
+      aria-valuenow={current}
+      aria-disabled={disabled || duration <= 0}
+      tabIndex={disabled || duration <= 0 ? -1 : 0}
+      onKeyDown={e => {
+        if (disabled || duration <= 0) return;
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const time = e.key === 'Home' ? 0 : e.key === 'End' ? duration : current + (e.key === 'ArrowLeft' ? -5 : 5);
+        onSeek(Math.max(0, Math.min(duration, time)));
+      }}
       className={`group relative flex h-5 items-center ${disabled || duration <= 0 ? 'cursor-not-allowed' : 'cursor-pointer'}`}
       onPointerDown={(e) => {
         if (disabled || duration <= 0) return;
@@ -63,6 +87,7 @@ function SeekBar({
         if (duration > 0) onSeek(frac(e.clientX) * duration);
       }}
       onPointerMove={(e) => {
+        if (disabled) return;
         const f = frac(e.clientX);
         setHoverX(f * 100);
         setHoverT(duration > 0 ? f * duration : null);
@@ -71,9 +96,9 @@ function SeekBar({
       onPointerUp={() => {
         draggingRef.current = false;
       }}
+      onPointerCancel={() => { draggingRef.current = false; }}
       onPointerLeave={() => {
         setHoverT(null);
-        draggingRef.current = false;
       }}
     >
       <div
@@ -91,15 +116,15 @@ function SeekBar({
               }}
             />
           ))}
-        <div className="absolute inset-y-0 left-0 rounded bg-accent" style={{ width: `${pct}%` }} />
+        <div className="absolute inset-y-0 left-0 rounded bg-white/80" style={{ width: `${pct}%` }} />
         <div
-          className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent opacity-0 shadow transition-opacity group-hover:opacity-100"
+          className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white opacity-100 shadow transition-opacity group-hover:opacity-100"
           style={{ left: `${pct}%` }}
         />
       </div>
-      {hoverT != null && duration > 0 && (
+      {hoverT != null && !disabled && duration > 0 && (
         <div
-          className="pointer-events-none absolute -top-8 -translate-x-1/2 rounded-md bg-black/80 px-2 py-1 text-[11px] tabular-nums text-white"
+          className="pointer-events-none absolute -top-8 -translate-x-1/2 rounded-lg border border-white/15 bg-black/50 px-2 py-1 backdrop-blur-md text-[11px] tabular-nums text-white"
           style={{ left: `${hoverX}%` }}
         >
           {formatTime(hoverT)}
@@ -166,7 +191,7 @@ export default function PlayerPage() {
   const fsRef = useRef(false);
   const sourceRef = useRef<MediaSource | null>(null);
   const clickTimerRef = useRef<number | undefined>();
-  const lockedRef = useRef(false);
+  const blockedGestureUntilRef = useRef(0);
   const generationRef = useRef(0);
   const switchingRef = useRef(false);
   const corsRetriedRef = useRef(false);
@@ -183,7 +208,10 @@ export default function PlayerPage() {
   const [buffered, setBuffered] = useState<[number, number][]>([]);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
-  const [locked, setLocked] = useState(false);
+  const [controlsMenu, setControlsMenu] = useState(false);
+  const controlsMenuRef = useRef(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const showControlsMenu = (value: boolean) => { controlsMenuRef.current = value; setControlsMenu(value); };
   const [notice, setNotice] = useState('');
   const [audioTracks, setAudioTracks] = useState<{ id: number; title: string; lang?: string }[]>([]);
   const [subTracks, setSubTracks] = useState<{ id: number; title: string; lang?: string; url?: string }[]>([]);
@@ -192,9 +220,7 @@ export default function PlayerPage() {
   const [subSearch, setSubSearch] = useState('');
   const [subSearches, setSubSearches] = useState<string[]>([]);
   const mediaKey = () => `${itemId}:${sourceRef.current?.Id ?? ''}:web`;
-  const setLock = useCallback((value: boolean) => { lockedRef.current = value; setLocked(value); }, []);
 
-  useEffect(() => { if (!settings.autoLockOnPause) setLock(false); }, [settings.autoLockOnPause, setLock]);
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(''), 3000);
@@ -215,7 +241,9 @@ export default function PlayerPage() {
     setControls(true);
     window.clearTimeout(hideTimerRef.current);
     const secs = useSettings.getState().autoHideControlsSeconds;
-    hideTimerRef.current = window.setTimeout(() => setControls(false), Math.max(1, secs) * 1000);
+    hideTimerRef.current = window.setTimeout(() => {
+      if (!controlsMenuRef.current) setControls(false);
+    }, Math.max(1, secs) * 1000);
   }, [setControls]);
 
   const togglePlay = useCallback(() => {
@@ -246,7 +274,7 @@ export default function PlayerPage() {
 
   const changeVolume = useCallback((nv: number) => {
     const v = videoRef.current;
-    if (!v || lockedRef.current) return;
+    if (!v) return;
     v.volume = nv;
     if (nv > 0) v.muted = false;
   }, []);
@@ -283,7 +311,9 @@ export default function PlayerPage() {
     switchingRef.current = false;
     corsRetriedRef.current = false;
     setLoading(true); setError(null); setBuffering(false); setItem(null);
-    setAudioTracks([]); setSubTracks([]); setAudioTrack(-1); setSubTrack(-1); setSubSearch(''); setLock(false);
+    usePlaybackTitle.getState().setTitle('');
+    showControlsMenu(false);
+    setAudioTracks([]); setSubTracks([]); setAudioTrack(-1); setSubTrack(-1); setSubSearch('');
     startedRef.current = false; sessionRef.current = {}; sourceRef.current = null;
     let cancelled = false;
     const controller = new AbortController();
@@ -306,6 +336,7 @@ export default function PlayerPage() {
         const source = info.MediaSources?.[0];
         if (!source) throw new Error('没有可用的媒体源');
         setItem(it);
+        usePlaybackTitle.getState().setTitle(mediaTitle(it));
         sourceRef.current = source;
         const prefs = getPlaybackPreferences(serverId, `${itemId}:${source.Id}:web`, useSettings.getState());
         setSubSearches(prefs.subtitleSearchQueries);
@@ -378,6 +409,7 @@ export default function PlayerPage() {
       cancelled = true;
       generationRef.current++;
       controller.abort();
+      usePlaybackTitle.getState().setTitle('');
       window.clearTimeout(clickTimerRef.current);
       reportStopped();
       hlsRef.current?.destroy();
@@ -424,8 +456,9 @@ export default function PlayerPage() {
 
   // ---------- Keyboard shortcuts ----------
   useEffect(() => bindBrowserPlaybackKeys(window, () => videoRef.current, () => useSettings.getState(), {
-    togglePlay, toggleLock: () => setLock(!lockedRef.current), fullscreen: toggleFullscreen, activity: poke, locked: () => lockedRef.current,
+    togglePlay, fullscreen: toggleFullscreen, activity: poke,
     exit: () => {
+          if (controlsMenuRef.current) { showControlsMenu(false); poke(); return; }
           if (isTauri && fsRef.current) {
             windowSetFullscreen(false);
             setFullscreen(false);
@@ -433,7 +466,7 @@ export default function PlayerPage() {
             navigate(-1);
           }
     },
-  }), [navigate, poke, togglePlay, toggleFullscreen, setFullscreen, setLock]);
+  }), [navigate, poke, togglePlay, toggleFullscreen, setFullscreen]);
 
   useEffect(() => {
     const onClose = (event: Event) => { event.preventDefault(); navigate(-1); };
@@ -475,8 +508,6 @@ export default function PlayerPage() {
 
   const handlePlay = () => {
     setPlaying(true);
-    setLock(false);
-    poke();
     const api = apiRef.current;
     const v = videoRef.current;
     const s = sessionRef.current;
@@ -508,6 +539,11 @@ export default function PlayerPage() {
   // ---------- Mouse handling (per settings) ----------
   const handleClick = () => {
     poke();
+    if (controlsMenuRef.current) {
+      showControlsMenu(false);
+      blockedGestureUntilRef.current = Date.now() + 500;
+      return;
+    }
     window.clearTimeout(clickTimerRef.current);
     if (settings.mouseLeftClick === 'playpause') clickTimerRef.current = window.setTimeout(togglePlay, 500);
   };
@@ -515,7 +551,7 @@ export default function PlayerPage() {
   const handleDoubleClick = () => {
     poke();
     window.clearTimeout(clickTimerRef.current);
-    if (settings.mouseLeftDoubleClick === 'playpause') togglePlay();
+    if (Date.now() >= blockedGestureUntilRef.current && settings.mouseLeftDoubleClick === 'playpause') togglePlay();
   };
 
   const handleContextMenu = (e: React.MouseEvent) => {
@@ -523,23 +559,18 @@ export default function PlayerPage() {
     if (settings.mouseRightClick !== 'toggleControls') return;
     if (controlsRef.current) {
       window.clearTimeout(hideTimerRef.current);
+      showControlsMenu(false);
       setControls(false);
     } else {
       poke();
     }
   };
 
-  const title = item
-    ? item.Type === 'Episode'
-      ? `${item.SeriesName ? item.SeriesName + ' ' : ''}S${item.ParentIndexNumber ?? '?'}E${
-          item.IndexNumber ?? '?'
-        } · ${item.Name}`
-      : item.Name
-    : '';
+  const title = item ? mediaTitle(item) : '';
 
   const skip = (delta: number) => {
     const v = videoRef.current;
-    if (!v || lockedRef.current) return;
+    if (!v) return;
     const time = Math.min(Math.max(0, v.currentTime + delta), v.duration || Infinity);
     if (!settings.preciseSeek && typeof v.fastSeek === 'function') v.fastSeek(time);
     else v.currentTime = time;
@@ -547,7 +578,7 @@ export default function PlayerPage() {
   };
 
   const switchMedia = async (direction: 'prev' | 'next') => {
-    if (!apiRef.current || !item || lockedRef.current || switchingRef.current) return;
+    if (!apiRef.current || !item || switchingRef.current) return;
     const generation = generationRef.current;
     switchingRef.current = true;
     try {
@@ -559,7 +590,6 @@ export default function PlayerPage() {
     finally { if (generation === generationRef.current) switchingRef.current = false; }
   };
   const selectTrack = (kind: 'audio' | 'sub', id: number) => {
-    if (lockedRef.current) return;
     const tracks = kind === 'audio' ? audioTracks : subTracks;
     if (hlsRef.current) {
       if (kind === 'audio') hlsRef.current.audioTrack = id;
@@ -580,7 +610,7 @@ export default function PlayerPage() {
   }, [subTrack, subTracks]);
   const captureScreenshot = async () => {
     const v = videoRef.current;
-    if (!v || !v.videoWidth || lockedRef.current) return;
+    if (!v || !v.videoWidth) return;
     try {
       const canvas = document.createElement('canvas');
       canvas.width = v.videoWidth; canvas.height = v.videoHeight;
@@ -623,6 +653,7 @@ export default function PlayerPage() {
         onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime ?? 0)}
         onProgress={readBuffered}
         onDurationChange={() => setDuration(videoRef.current?.duration ?? 0)}
+        onRateChange={() => setPlaybackRate(videoRef.current?.playbackRate ?? 1)}
         onVolumeChange={() => {
           const v = videoRef.current;
           if (v) {
@@ -633,8 +664,6 @@ export default function PlayerPage() {
         onPlay={handlePlay}
         onPause={() => {
           setPlaying(false);
-          setLock(useSettings.getState().autoLockOnPause);
-          poke();
         }}
         onWaiting={() => setBuffering(true)}
         onStalled={() => setBuffering(true)}
@@ -657,6 +686,10 @@ export default function PlayerPage() {
         {subTracks.filter(t => t.url).map(t => <track key={t.id} kind="subtitles" src={t.url} label={t.title} srcLang={t.lang} />)}
       </video>
 
+      {controlsVisible && <div className="player-side-tools" onClick={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}>
+        {settings.showScreenshotButton && <button onClick={captureScreenshot} className="player-control-button" aria-label="截图" data-tooltip="截图"><IconCamera size={20} /></button>}
+        <button onClick={() => { showControlsMenu(!controlsMenu); poke(); }} className="player-control-button" aria-label="播放设置" data-tooltip="播放设置"><IconList size={20} /></button>
+      </div>}
       {notice && <div className="pointer-events-none absolute inset-x-0 top-20 z-30 text-center text-sm text-white">{notice}</div>}
 
       {/* Loading / buffering spinner */}
@@ -676,101 +709,104 @@ export default function PlayerPage() {
 
       {/* Top bar */}
       <div
-        className={`absolute inset-x-0 top-0 z-10 flex items-center gap-3 bg-gradient-to-b from-black/60 to-transparent px-5 pb-10 pt-4 transition-opacity duration-300 ${
+        className={`absolute inset-x-0 top-0 z-10 flex items-center gap-3 bg-gradient-to-b from-black/30 to-transparent px-5 pb-6 pt-4 transition-opacity duration-300 ${
           controlsVisible || loading || buffering || duration === 0 ? 'opacity-100' : 'pointer-events-none opacity-0'
         }`}
         onClick={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
       >
-        <div className="truncate text-sm text-white drop-shadow">{title}</div>
-        {locked && <button onClick={() => setLock(false)} className="ml-auto rounded-full bg-white/15 px-3 py-1 text-xs text-white">解锁播放操作</button>}
+        <div className="min-w-0 flex-1 truncate text-center text-sm font-medium text-white drop-shadow">{title}</div>
       </div>
 
-      {/* Bottom bar */}
+      {/* Timeline and transport share the native controller's inset surface. */}
       <div
-        className={`absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/70 to-transparent px-6 pb-5 pt-16 transition-opacity duration-300 ${
+        className={`player-controls absolute inset-x-0 bottom-0 z-10 transition-opacity duration-300 ${
           controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
         }`}
         onClick={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
       >
-        <SeekBar
-          disabled={locked}
-          current={currentTime}
-          duration={duration}
-          buffered={buffered}
-          onSeek={(t) => {
-            const v = videoRef.current;
-            if (v && !lockedRef.current) {
-              if (!settings.preciseSeek && typeof v.fastSeek === 'function') v.fastSeek(t);
-              else v.currentTime = t;
-              setCurrentTime(t);
-            }
-          }}
-        />
-        <div className="mt-2 flex flex-wrap items-center gap-3">
-          <button
-            onClick={togglePlay}
-            className="text-white transition hover:text-white/80"
-            title={playing ? '暂停' : '播放'}
-          >
-            {playing ? <IconPause size={22} /> : <IconPlay size={22} />}
-          </button>
-          {settings.showSkipButtons && <><button
-            disabled={locked || duration <= 0}
-            onClick={() => skip(-settings.rewindSeconds)}
-            className="text-white/90 transition hover:text-white"
-            title={`快退 ${settings.rewindSeconds} 秒`}
-          >
-            <IconSkipBack size={18} />
-          </button>
-          <button
-            onClick={() => skip(settings.forwardSeconds)}
-            disabled={locked || duration <= 0}
-            className="text-white/90 transition hover:text-white"
-            title={`快进 ${settings.forwardSeconds} 秒`}
-          >
-            <IconSkipForward size={18} />
-          </button></>}
-          {settings.showSwitchMediaButton && <><button disabled={locked} onClick={() => switchMedia('prev')} className="text-xs text-white/90 disabled:opacity-40">上一项</button>
-            <button disabled={locked} onClick={() => switchMedia('next')} className="text-xs text-white/90 disabled:opacity-40">下一项</button></>}
-          {settings.showScreenshotButton && <button disabled={locked} onClick={captureScreenshot} className="text-xs text-white/90 disabled:opacity-40">截图</button>}
-          {audioTracks.length > 1 && <select aria-label="音轨" disabled={locked} value={audioTrack} onChange={e => selectTrack('audio', Number(e.target.value))} className="max-w-24 rounded bg-black/70 text-xs text-white">
-            {audioTracks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
-          </select>}
-          {subTracks.length > 0 && <><input aria-label="搜索字幕" list="subtitle-search-history" disabled={locked} value={subSearch} onChange={e => setSubSearch(e.target.value)}
-            onBlur={() => {
-              if (!serverId || !settings.subtitleSearchHistory || !subSearch.trim()) return;
-              const searches = [subSearch.trim(), ...subSearches.filter(s => s !== subSearch.trim())].slice(0, 10);
-              setSubSearches(searches); saveSubtitleSearchQueries(serverId, searches);
-            }} placeholder="搜索字幕" className="w-20 rounded bg-black/70 px-1 text-xs text-white" />
+        {controlsMenu && <div className="player-controls-menu absolute bottom-[calc(100%+10px)] right-2 w-72 max-w-[calc(100%-40px)] overflow-y-auto rounded-xl border border-white/15 bg-black/50 p-4 text-sm text-white shadow-2xl backdrop-blur-xl"
+          style={{ maxHeight: 'max(80px, min(360px, calc(100vh - 220px)))' }}>
+          <div className="mb-3 text-xs font-medium text-white/50">播放设置</div>
+          <label className="player-menu-field">倍速
+            <select aria-label="倍速" value={playbackRate} onChange={e => {
+              if (videoRef.current) videoRef.current.playbackRate = Number(e.target.value);
+            }}>
+              {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3, 4, 8].map(rate => <option key={rate} value={rate}>{rate}x</option>)}
+              {![0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3, 4, 8].includes(playbackRate) && <option value={playbackRate}>{playbackRate}x</option>}
+            </select>
+          </label>
+          {audioTracks.length > 1 && <label className="player-menu-field">音轨
+            <select aria-label="音轨" value={audioTrack} onChange={e => selectTrack('audio', Number(e.target.value))}>
+              {audioTracks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+            </select>
+          </label>}
+          {subTracks.length > 0 && <>
+            <label className="player-menu-field">字幕
+              <select aria-label="字幕" value={subTrack} onChange={e => selectTrack('sub', Number(e.target.value))}>
+                <option value={-1}>字幕关闭</option>
+                {subTracks.filter(t => t.id === subTrack || t.title.toLowerCase().includes(subSearch.toLowerCase())).map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+              </select>
+            </label>
+            <input aria-label="搜索字幕" list="subtitle-search-history" value={subSearch} onChange={e => setSubSearch(e.target.value)}
+              onBlur={() => {
+                if (!serverId || !settings.subtitleSearchHistory || !subSearch.trim()) return;
+                const searches = [subSearch.trim(), ...subSearches.filter(s => s !== subSearch.trim())].slice(0, 10);
+                setSubSearches(searches); saveSubtitleSearchQueries(serverId, searches);
+              }} placeholder="搜索当前字幕" className="mb-2 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white outline-none focus:border-white/50" />
             {settings.subtitleSearchHistory && <datalist id="subtitle-search-history">{subSearches.map(q => <option key={q} value={q} />)}</datalist>}
-            <select aria-label="字幕" disabled={locked} value={subTrack} onChange={e => selectTrack('sub', Number(e.target.value))} className="max-w-24 rounded bg-black/70 text-xs text-white">
-              <option value={-1}>字幕关闭</option>{subTracks.filter(t => t.id === subTrack || t.title.toLowerCase().includes(subSearch.toLowerCase())).map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
-            </select></>}
-          <span className="text-xs tabular-nums text-white/90">
-            {formatTime(currentTime)} / {formatTime(duration)}
-          </span>
-          <div className="flex-1" />
-          <button
-            disabled={locked}
-            onClick={() => {
-              const v = videoRef.current;
-              if (v && !lockedRef.current) v.muted = !v.muted;
-            }}
-            className="text-white/90 transition hover:text-white"
-            title={muted ? '取消静音' : '静音'}
-          >
-            <IconVolume size={18} />
-          </button>
-          <VolumeSlider volume={volume} muted={muted} onChange={changeVolume} disabled={locked} />
-          <button
-            onClick={toggleFullscreen}
-            className="text-white/90 transition hover:text-white"
-            title={isFullscreen ? '退出全屏' : '全屏'}
-          >
-            <IconFullscreen size={18} />
-          </button>
+          </>}
+          <div className="player-menu-field">音量
+            <VolumeSlider volume={volume} muted={muted} onChange={changeVolume} />
+          </div>
+          <div className="player-compact-actions">
+            {settings.showSwitchMediaButton && <>
+              <button onClick={() => switchMedia('prev')}>上一项媒体</button>
+              <button onClick={() => switchMedia('next')}>下一项媒体</button>
+            </>}
+            {settings.showSkipButtons && <>
+              <button disabled={duration <= 0} onClick={() => skip(-settings.rewindSeconds)}>快退 {settings.rewindSeconds} 秒</button>
+              <button disabled={duration <= 0} onClick={() => skip(settings.forwardSeconds)}>快进 {settings.forwardSeconds} 秒</button>
+            </>}
+          </div>
+          {settings.showScreenshotButton && <button onClick={captureScreenshot} className="mt-2 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-xs text-white/80 hover:bg-white/10 disabled:opacity-30"><IconCamera size={16} />截图</button>}
+        </div>}
+        <div className="player-glass-panel">
+          <div className="player-timeline flex items-center gap-4 text-sm tabular-nums">
+            <span className="text-white/95">{formatTime(currentTime)}</span>
+            <div className="min-w-0 flex-1"><SeekBar current={currentTime} duration={duration} buffered={buffered}
+              onSeek={t => {
+                const v = videoRef.current;
+                if (v) {
+                  if (!settings.preciseSeek && typeof v.fastSeek === 'function') v.fastSeek(t);
+                  else v.currentTime = t;
+                  setCurrentTime(t);
+                }
+              }} /></div>
+            <span className="text-white/95">{formatTime(duration)}</span>
+          </div>
+          <div className="player-transport">
+            <div className="player-transport-actions flex shrink-0 items-center">
+              {settings.showSwitchMediaButton && <button onClick={() => switchMedia('prev')} className="player-control-button player-secondary-button" aria-label="上一项媒体" data-tooltip="上一项媒体"><IconPrevious size={20} /></button>}
+              {settings.showSkipButtons && <button disabled={duration <= 0} onClick={() => skip(-settings.rewindSeconds)} className="player-control-button player-secondary-button" aria-label={`快退 ${settings.rewindSeconds} 秒`} data-tooltip={`快退 ${settings.rewindSeconds} 秒`}><IconSkipBack size={18} /></button>}
+              <button onClick={togglePlay} className="player-control-button player-play-button" aria-label={playing ? '暂停 · 空格' : '播放 · 空格'} data-tooltip={playing ? '暂停 · 空格' : '播放 · 空格'}>
+                {playing ? <IconPause size={18} /> : <IconPlay size={18} />}
+              </button>
+              {settings.showSkipButtons && <button disabled={duration <= 0} onClick={() => skip(settings.forwardSeconds)} className="player-control-button player-secondary-button" aria-label={`快进 ${settings.forwardSeconds} 秒`} data-tooltip={`快进 ${settings.forwardSeconds} 秒`}><IconSkipForward size={18} /></button>}
+              {settings.showSwitchMediaButton && <button onClick={() => switchMedia('next')} className="player-control-button player-secondary-button" aria-label="下一项媒体" data-tooltip="下一项媒体"><IconNext size={20} /></button>}
+            </div>
+            <div className="player-context-actions flex shrink-0 items-center">
+              <button className="player-control-button player-track-action" aria-label={`倍速 ${playbackRate}x`} data-tooltip={`倍速 ${playbackRate}x`} onClick={() => { showControlsMenu(!controlsMenu); poke(); }} aria-expanded={controlsMenu}><IconPlaybackSpeed size={23} /></button>
+              {subTracks.length > 0 && <button className="player-control-button player-track-action" aria-label="字幕" data-tooltip="字幕" onClick={() => { showControlsMenu(!controlsMenu); poke(); }} aria-expanded={controlsMenu}><IconPlaybackSubtitle size={23} /></button>}
+              {audioTracks.length > 1 && <button className="player-control-button player-track-action" aria-label="音轨" data-tooltip="音轨" onClick={() => { showControlsMenu(!controlsMenu); poke(); }} aria-expanded={controlsMenu}><IconPlaybackAudio size={23} /></button>}
+              <button onClick={() => {
+                const v = videoRef.current; if (v) v.muted = !v.muted;
+              }} className="player-control-button" aria-pressed={muted} aria-label={muted ? '取消静音 · M' : '静音 · M'} data-tooltip={muted ? '取消静音 · M' : '静音 · M'}><span className="player-icon-ring"><IconVolume size={14} /></span></button>
+              <button onClick={toggleFullscreen} className="player-control-button" aria-label={isFullscreen ? '退出全屏' : '全屏 · 回车'} data-tooltip={isFullscreen ? '退出全屏' : '全屏 · 回车'}><IconFullscreen size={18} /></button>
+              <button onClick={() => { showControlsMenu(!controlsMenu); poke(); }} className="player-control-button" aria-label="更多" data-tooltip="更多" aria-expanded={controlsMenu}><span className="player-icon-ring"><IconMore size={14} /></span></button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

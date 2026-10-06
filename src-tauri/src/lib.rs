@@ -13,6 +13,7 @@ pub fn run() {
             player::player_status,
             player::player_message,
             player::player_escape,
+            player::player_keyboard_action,
         ])
         .setup(|app| {
             // Create the main window programmatically so the WebView2 data
@@ -34,6 +35,9 @@ pub fn run() {
 
             let handle = app.handle().clone();
             window.on_window_event(move |event| {
+                if let WindowEvent::Focused(focused) = event {
+                    player::on_main_window_focused(&handle.state::<PlayerState>(), *focused);
+                }
                 if let WindowEvent::Resized(_) = event {
                     let state = handle.state::<PlayerState>();
                     if let Some(w) = handle.get_webview_window("main") {

@@ -24,9 +24,11 @@
 
 ## 内嵌播放器
 
-应用内嵌 [mpv](https://mpv.io/)（shinchiro Windows 构建）作为播放内核：Rust 端在主窗口客户区创建 Win32 子窗口，mpv 通过 `--wid` 嵌入渲染，JSON IPC（命名管道）下发操作并回传播放位置。点击标题栏关闭按钮退出播放；Esc 优先关闭媒体信息或菜单，再退出播放。回车或 F 切换全屏，空格播放/暂停，K 锁定/解锁控制，鼠标操作可在设置中调整。
+应用内嵌 [mpv](https://mpv.io/)（shinchiro Windows 构建）作为播放内核：Rust 端在主窗口客户区创建 Win32 子窗口，mpv 通过 `--wid` 嵌入渲染，JSON IPC（命名管道）下发操作并回传播放位置。点击标题栏关闭按钮退出播放；Esc 优先关闭媒体信息或菜单，再退出播放。回车或 F 切换全屏，空格播放/暂停；暂停时其他操作保持可用，空格不会重新显示控制栏。双击画面播放/暂停，鼠标操作可在设置中调整。
 
 加载期间也可退出并取消请求。原生播放器使用 Windows 信任证书校验 HTTPS，支持音轨字幕偏好、截图、响应式控制栏，以及适应窗口/裁切填充。
+
+播放器标题使用媒体元数据；控制栏采用半透明背景、白色图标、悬浮文字提示和半透明菜单，默认静止 3 秒后隐藏。Alt+Tab 返回应用后可直接使用空格、回车。截图优先保存在系统图片目录的 `MyJellyfinClient` 文件夹，不可写时使用应用本地数据目录；开发版使用开发数据目录下的 `screenshots`，保存成功会显示实际路径。
 
 mpv 二进制（约 120MB，不提交 Git）需放置在 `src-tauri/resources/mpv/`。从 [mpv-winbuild-cmake](https://github.com/shinchiro/mpv-winbuild-cmake/releases) 下载 x86_64 构建，将 `mpv.exe`、`mpv.com` 和包内随附 DLL 放入该目录，保留仓库自带的 `portable_config/scripts/mjc-osc.lua`。
 
@@ -47,6 +49,8 @@ scripts\build-tauri.ps1  # 产出 NSIS 安装包 (src-tauri/target/release/bundl
 ```
 
 开发脚本使用全局 Cargo，不再携带工作区 Rust 工具链。开发账号和设置保存在 `.local/webview2/`（不提交 Git）；安装版使用系统应用数据目录。`node_modules/`、`dist/`、`src-tauri/target/` 和 TypeScript 增量缓存均可重新生成。mpv 二进制保留在 `src-tauri/resources/mpv/`，控制脚本 `portable_config/scripts/mjc-osc.lua` 属于应用源码。
+
+构建脚本先处理 mpv 运行资源签名，再由 Tauri 在打包过程中签名应用程序、卸载程序和安装包。签名只使用已有的本机开发证书，未找到时跳过；不会自动安装证书。开发证书不等同于公开受信任的商业代码签名证书。
 
 ## 验证
 

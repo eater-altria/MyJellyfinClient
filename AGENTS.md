@@ -4,6 +4,8 @@
 
 开始处理本仓库的任务前，完整阅读本文件。这里包含项目结构、开发命令、回归测试和需要保留的行为约定。
 
+涉及界面、交互或代码风格时，同时阅读 [DESIGN.md](DESIGN.md)，其中详述设计美学、产品哲学、交互与播放器布局，以及分层编码和验证规范。
+
 以用户当前指令和实际代码为准；如果指南与代码不一致，先核对并在完成相关修改后更新指南。不要把此文件当作推送、发布 Release、安装证书或修改系统设置的额外授权。
 
 ## 项目定位
@@ -29,6 +31,7 @@
 | `src/pages/NativePlayer.tsx` | 原生播放启动、事件订阅、进度上报和退出协调 |
 | `src/pages/Player.tsx` | 浏览器 HTML5/HLS 播放回退 |
 | `src/player/` | 播放偏好记忆、相邻媒体、键盘操作及退出事件 |
+| `src/player/playbackTitle.ts` | 元数据标题格式化及当前窗口标题，不持久化 |
 | `src/components/TitleBar.tsx`、`WindowResizeHandles.tsx` | 窗口标题栏和边缘缩放 |
 | `src/platform/window.ts` | Tauri 窗口 API 包装 |
 | `src-tauri/src/lib.rs` | 窗口创建、Tauri 命令注册和窗口事件 |
@@ -61,10 +64,12 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
 ## 数据与清理
 
 - 开发脚本默认把 WebView2 数据保存在 `.local/webview2`；可通过 `MJC_WEBVIEW_DATA` 覆盖。安装版默认使用系统应用数据目录。
+- 开发版截图保存在 `MJC_WEBVIEW_DATA/screenshots`（默认 `.local/webview2/screenshots`）；安装版优先使用系统图片目录的 `MyJellyfinClient` 文件夹，不可写时回退到应用本地数据目录的 `screenshots`。保存前验证真实文件写入权限，失败时清理本次预留文件；截图属于用户数据。
 - `.local` 包含开发账号、登录状态、设置和偏好，删除会重置开发版数据。它不是纯构建缓存。
 - `.local`、`.codex-remote-attachments`、环境文件、密钥、日志、构建产物及 mpv 二进制不应提交。不要把用户提供的服务器地址、密码、令牌或截图写入源码和测试。
 - `node_modules`、`dist`、`src-tauri/target`、`src-tauri/gen`、`*.tsbuildinfo` 可重新生成。清理前先区分持久数据、运行资源和可再生产物；递归操作应验证绝对路径范围。
 - 必要运行资源包括 mpv、其控制脚本和 `src-tauri/resources/WebView2Loader.dll`，不能按普通临时文件删除。
+- 安装包通过 `tauri.conf.json` 明确收录 mpv 的 EXE、COM、DLL 和 `mjc-osc.lua`，不收录开发运行产生的 `portable_config/cache`；不要为发布清空正在使用的开发数据。
 
 ## 媒体库与协议约定
 
@@ -88,18 +93,23 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
 - 网络慢或正在协商媒体源时，关闭必须取消请求；迟到回调不能重新启动播放或把用户导航回播放器。
 - mpv 宿主窗口在媒体就绪前保持隐藏，让客户端窗口控件可用。初始/失败退出的零位置不能覆盖服务器的续播位置。
 - 保留 `StartupGuard` 的启动失败回滚、正常停止清理和唯一的每次播放 IPC 名称；截图等异步任务不能串入下一次播放。
+- 创建进程时保留启动句柄，连接 IPC 期间检查真实退出码。`0xC0000142` 初始化失败只自动重试一次，超时或失败清理对应进程；继承应用的错误处理模式，避免阻塞式系统初始化弹窗，不修改系统设置。
 
 ### 原生窗口与 IPC
 
 - mpv 通过 `--wid` 渲染到 Win32 子窗口。子窗口应为 React 标题栏预留 36 个逻辑像素，全屏时恢复完整视频区域。
 - 窗口比例计算应排除标题栏；最小化、最大化、全屏和还原不能互相破坏。窗口关闭时需清理 mpv。
-- 鼠标、键盘和光标命中区域来自原生控件；隐藏、锁定和模态遮挡的控件不能留下可点击提示。
+- 鼠标、键盘和光标命中区域来自原生控件；隐藏和模态遮挡的控件不能留下可点击提示。Alt+Tab 激活窗口后恢复可见原生宿主的键盘焦点，WebView 持有焦点时仍转发空格和回车。
 - Win32 回调不能直接做阻塞管道读写。命令写入和事件读取使用独立 IPC 连接；同步句柄克隆不能替代独立连接。
 - 创建、销毁和修改宿主窗口时注意所属 UI 线程。现有进程启动兼容逻辑也有实际用途，修改后验证真实 mpv 启动。
 
 ### UI、设置、TLS 与缩放
 
 - 控件字号和点击尺寸跟随 Windows DPI，不随窗口高宽整体缩小。小窗口通过分行、折叠到「更多」和菜单滚动适配。
+- 窗口标题、原生画面标题及开播提示使用服务器元数据，不能回退到带鉴权参数的流 URL。双击画面按设置暂停/播放，控制面板和菜单的双击不触发背景播放动作。
+- 播放器控制使用白色图标、半透明底栏和不同透明度的白色进度条，文字标签只在悬浮时出现；菜单选中项使用白色勾选。暂停不锁定控件，保留切换媒体、全屏、进度和音轨等操作；已移除暂停锁定设置、解锁提示和 K 锁定快捷键，旧设置迁移时删除此字段。
+- 空格仅切换播放/暂停，不更新控制栏活动时间或重新显示控制 UI；首次激活应用后也应直接可用。
+- 自动隐藏默认 3 秒，旧设置通过一次性版本迁移采用 3 秒；之后用户重新选择的间隔保持持久化。菜单、媒体信息和进度拖动期间保持控件可见。
 - ASS 行级对齐标签不要重复或冲突：文字应使用对应 `an7/an8/an9`，矢量绘制明确使用 `an7`。视觉位置与点击区域要同步。
 - 新设置必须接通保存、读取、执行和平台适用范围；不能只有设置页开关。浏览器不能实现的桌面设置应明确标注。
 - 简繁字幕偏好不能只靠通用中文语言码；轨道记忆在同媒体源优先 ID，跨媒体源按语言、名称等元数据匹配。
@@ -124,7 +134,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 & ./src-tauri/resources/mpv/mpv.com --no-config --vo=null --idle=yes --script=scripts/test-player-osc.lua
 ```
 
-`test:home` 覆盖全部分类、8 个合集、成员浏览、多页加载、重试和取消；`test:servers` 使用本地 HTTP fixture；`test:playback` 覆盖关闭及慢网络生命周期；`test:settings` 覆盖真实组件和偏好。Rust/Lua 测试覆盖原生输入、TLS、截图、渲染、响应式控件等，需本地 mpv 和 Windows 环境。
+`test:home` 覆盖全部分类、8 个合集、成员浏览、多页加载、重试和取消；`test:servers` 使用本地 HTTP fixture；`test:playback` 覆盖关闭、元数据标题及慢网络生命周期；`test:settings` 覆盖真实组件、偏好和 3 秒迁移。Rust/Lua 测试覆盖原生输入、启动重试、TLS、截图目录回退、真实 GPU/ASS 渲染及响应式控件，需本地 mpv 和 Windows 环境。原生控件渲染回归使用 `scripts/test-player-osc-render.lua` 的合成媒体状态，不读取账号或服务器截图。
 
 若受限执行环境无法读取构建工具目录或系统临时目录，应区分权限问题和代码问题。必要时为本次验证指定可写的临时目录，不能据此改坏用户正常构建配置；不要在敏感输出中打印令牌。
 
@@ -135,6 +145,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 - 当前仓库使用本地 `gh`。Git TLS 握手失败时可重试或检查连接，不要关闭证书校验。
 - 打包使用 `./scripts/build-tauri.ps1`；默认 x64 MSVC 的 NSIS 输出在 `src-tauri/target/release/bundle/nsis/`。
 - `scripts/sign.ps1` 可使用已有本机开发证书，但这不等于所有用户机器都信任它。`make-dev-cert.ps1` 会修改证书库，不应作为普通构建步骤自动运行。
+- `build-tauri.ps1` 先签名 mpv 运行资源；Tauri 的 `bundle.windows.signCommand` 调用 `sign.ps1 -Paths`，在二进制补丁之后、压入安装包之前签名程序，并签名卸载程序与最终安装包。不要恢复只在打包完成后签名源码目录程序的流程；保留已有有效签名，未找到开发证书时跳过，签名失败时终止构建。
 - 发布前核对源码提交、版本、程序架构、包内 mpv/控制脚本和附件 SHA-256。版本定义位于 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`，Cargo 锁文件中的本项目版本也需一致。
 - Release 是构建快照；推送源码不会自动更新已发布安装包。不要擅自覆盖已有标签或资产；发布完成后验证公开状态、附件上传状态、大小和校验值。
 

@@ -3,7 +3,7 @@ import type { AppSettings } from '../store/settings';
 /** A short press seeks on release; a held arrow temporarily changes playback rate. */
 export function bindBrowserPlaybackKeys(target: Window, video: () => HTMLVideoElement | null,
   settings: () => AppSettings, actions: {
-    togglePlay(): void; toggleLock?(): void; fullscreen(): void; exit(): void; activity(): void; locked(): boolean;
+    togglePlay(): void; fullscreen(): void; exit(): void; activity(): void;
   }) {
   let held: { key: string; timer: number; rate: number; fast: boolean } | undefined;
   const release = (seek: boolean) => {
@@ -13,7 +13,7 @@ export function bindBrowserPlaybackKeys(target: Window, video: () => HTMLVideoEl
     held = undefined;
     if (!v) return;
     if (old.fast) v.playbackRate = old.rate;
-    else if (seek && !actions.locked()) {
+    else if (seek) {
       const st = settings();
       const pos = v.currentTime + (old.key === 'ArrowLeft' ? -st.rewindSeconds : st.forwardSeconds);
       const end = Number.isFinite(v.duration) ? v.duration : Infinity;
@@ -23,24 +23,23 @@ export function bindBrowserPlaybackKeys(target: Window, video: () => HTMLVideoEl
     }
   };
   const down = (e: KeyboardEvent) => {
-    if (e.target instanceof HTMLElement && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
-    if (e.key === 'Escape') { release(false); actions.exit(); return; }
     if (e.repeat) return;
+    if (e.key === 'Escape') { e.preventDefault(); release(false); actions.exit(); return; }
+    if (e.target instanceof HTMLElement && /INPUT|TEXTAREA|SELECT|BUTTON/.test(e.target.tagName)) return;
     const v = video();
     if (!v) return;
     const st = settings();
-    if ([' ', 'k', 'K'].includes(e.key)) {
+    if (e.key === ' ') {
       e.preventDefault(); release(false);
-      if (e.key.toLowerCase() === 'k' && actions.toggleLock) actions.toggleLock();
-      else actions.togglePlay();
+      actions.togglePlay();
+      return; // Space changes playback without waking the controller.
     }
     else if (['Enter', 'f', 'F'].includes(e.key)) { e.preventDefault(); actions.fullscreen(); }
-    else if (actions.locked()) return;
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       e.preventDefault(); release(false);
       const current = { key: e.key, rate: v.playbackRate, fast: false, timer: 0 };
       current.timer = target.setTimeout(() => {
-        if (held !== current || actions.locked()) return;
+        if (held !== current) return;
         current.fast = true;
         v.playbackRate = current.key === 'ArrowLeft' ? settings().longPressLeftRate : settings().longPressRightRate;
       }, 350);

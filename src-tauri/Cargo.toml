@@ -1,6 +1,6 @@
 [package]
 name = "my-jellyfin-client"
-version = "0.1.0"
+version = "0.2.0"
 description = "A Jellyfin Windows client with SenPlayer-style UI"
 authors = ["you"]
 edition = "2021"
@@ -33,6 +33,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_LibraryLoader",
   "Win32_System_Threading",
   "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Diagnostics_Debug",
 ] }
 
 [profile.release]

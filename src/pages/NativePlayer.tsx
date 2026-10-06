@@ -7,6 +7,7 @@ import { useSettings } from '../store/settings';
 import { getAdjacentMedia, getPlaybackPreferences, rememberTrack, saveSubtitleSearchQueries, type TrackPreference } from '../player/playbackPreferences';
 import type { BaseItem } from '../api/mediaServer';
 import { PLAYER_EXIT_EVENT } from '../player/exitPlayback';
+import { mediaTitle, usePlaybackTitle } from '../player/playbackTitle';
 
 interface PositionPayload {
   position: number;
@@ -69,6 +70,7 @@ export default function NativePlayer() {
     const unlistens: UnlistenFn[] = [];
     setStarting(true);
     setError(null);
+    usePlaybackTitle.getState().setTitle('');
 
     const api = useServers.getState().getApi(serverId);
     if (!api) {
@@ -181,6 +183,8 @@ export default function NativePlayer() {
         const it = await api.getItem(itemId, controller.signal);
         if (cancelled || done) return;
         item = it;
+        const title = mediaTitle(it);
+        usePlaybackTitle.getState().setTitle(title);
 
         const st = useSettings.getState();
         const posParam = searchParams.get('pos');
@@ -216,13 +220,6 @@ export default function NativePlayer() {
         const subFiles = api.externalSubtitleUrls(itemId, source, st.externalSubtitleRule);
         mediaKey = `${itemId}:${source!.Id}`;
 
-        const title =
-          it.Type === 'Episode'
-            ? `${it.SeriesName ? it.SeriesName + ' ' : ''}S${it.ParentIndexNumber ?? '?'}E${
-                it.IndexNumber ?? '?'
-              } · ${it.Name}`
-            : it.Name;
-
         playbackRequested = true;
         await invoke('start_playback', {
           opts: {
@@ -255,9 +252,16 @@ export default function NativePlayer() {
       }
     })();
 
-    // ESC fallback when the webview (not the mpv window) has focus
+    // The webview can regain keyboard focus after Alt+Tab or a title-bar action.
     const onKey = async (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.repeat) return;
+      if (cancelled || done || e.repeat) return;
+      if (e.key === ' ' || e.key === 'Enter') {
+        if (!loaded) return;
+        e.preventDefault();
+        await invoke('player_keyboard_action', { key: e.key === ' ' ? 'SPACE' : 'ENTER' }).catch(() => {});
+        return;
+      }
+      if (e.key !== 'Escape') return;
       e.preventDefault();
       // The webview can keep focus after a title-bar interaction. Loaded
       // playback still delegates Escape to the OSC's modal/menu stack.
@@ -288,6 +292,7 @@ export default function NativePlayer() {
     return () => {
       cancelled = true;
       controller.abort();
+      usePlaybackTitle.getState().setTitle('');
       window.clearInterval(interval);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener(PLAYER_EXIT_EVENT, onClose);
@@ -312,7 +317,7 @@ export default function NativePlayer() {
         </>
       ) : (
         <div className="text-[12px] text-white/30">
-          ESC 退出 · ←/→ 快退/快进 · ↑/↓/滚轮 音量 · A 音轨 · S 字幕 · M 静音 · 空格 暂停/继续 · K 锁定/解锁控制 · 回车 全屏
+          ESC 退出 · ←/→ 快退/快进 · ↑/↓/滚轮 音量 · A 音轨 · S 字幕 · M 静音 · 空格 暂停/继续 · 回车 全屏
         </div>
       )}
     </div>

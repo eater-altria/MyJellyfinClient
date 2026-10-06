@@ -9,6 +9,16 @@ const code = esbuild.transformSync(fs.readFileSync('src/pages/NativePlayer.tsx',
 const titleCode = esbuild.transformSync(fs.readFileSync('src/components/TitleBar.tsx', 'utf8'), {
   loader: 'tsx', format: 'cjs', jsx: 'automatic',
 }).code;
+const titleModule = { exports: {} };
+const metadataCode = esbuild.transformSync(fs.readFileSync('src/player/playbackTitle.ts', 'utf8'), {
+  loader: 'ts', format: 'cjs',
+}).code;
+new Function('require', 'module', 'exports', metadataCode)(require, titleModule, titleModule.exports);
+const { mediaTitle, usePlaybackTitle: titleStore } = titleModule.exports;
+const usePlaybackTitle = Object.assign(selector => selector(titleStore.getState()), { getState: titleStore.getState });
+assert.equal(mediaTitle({ Name: '泰坦尼克号', Type: 'Movie' }), '泰坦尼克号');
+assert.equal(mediaTitle({ Name: '第一集', Type: 'Episode', SeriesName: '测试剧集', ParentIndexNumber: 1, IndexNumber: 2 }), '测试剧集 · S1E2 · 第一集');
+assert.equal(mediaTitle({ Name: '特别篇', Type: 'Episode' }), '特别篇', 'Missing metadata must not invent episode numbers');
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 const deferred = () => {
   let resolve;
@@ -59,6 +69,7 @@ function mount(protocol, pending) {
     '../store/settings': { useSettings: { getState: () => ({ resumeFromLastPosition: true }) } },
     '../player/playbackPreferences': { getPlaybackPreferences: () => ({}), rememberTrack: () => {},
       saveSubtitleSearchQueries: () => {}, getAdjacentMedia: async () => undefined },
+    '../player/playbackTitle': { mediaTitle, usePlaybackTitle },
     '../player/exitPlayback': { PLAYER_EXIT_EVENT: 'mjc:exit-playback' },
     '../platform/window': { isTauri: false, windowClose: () => calls.push(['window-close']), windowIsMaximized: async () => false,
       windowIsFullscreen: async () => false, windowMinimize() {}, windowToggleMaximize() {} },
@@ -83,7 +94,8 @@ function mount(protocol, pending) {
   };
   const closeButton = findClose(header);
   assert(closeButton, 'Player title bar must provide a close control');
-  return { calls, events, states, signals, delayed, item, cleanup,
+  return { calls, events, states, signals, delayed, item, cleanup, renderHeader: () => title.exports.default({ dark: true }),
+    key: (key, repeat = false) => keys.get('keydown')({ key, repeat, preventDefault() {} }),
     escape: () => keys.get('keydown')({ key: 'Escape', preventDefault() {} }),
     close: () => closeButton.props.onClick() };
 }
@@ -102,6 +114,10 @@ function mount(protocol, pending) {
           assert(!player.states.includes(false), 'IPC startup must not end the media loading screen');
           player.events.get('mpv://position')({ payload: { position: 0, duration: 0, paused: false, active: true } });
         }
+        if (pending !== 'item') {
+          assert.equal(titleStore.getState().title, 'Test', 'Window header must use server metadata before media negotiation finishes');
+          assert.equal(player.renderHeader().props.children[1].props.title, 'Test');
+        }
         player[exit]();
         assert.equal(player.calls.filter(c => c[0] === 'navigate').length, 1, 'Exit must navigate without waiting for the network');
         assert(!player.calls.some(c => c[0] === 'window-close'), 'Player close must keep the app window open');
@@ -111,6 +127,7 @@ function mount(protocol, pending) {
         player.cleanup();
         player.delayed.resolve(pending === 'info' ? { MediaSources: player.item.MediaSources } : player.item);
         await flush();
+        assert.equal(titleStore.getState().title, '', 'Disposed or late playback must not leave a stale header title');
         const commands = player.calls.filter(c => c[0] === 'start_playback');
         assert.equal(commands.length, pending === 'ipc' || pending === 'media' ? 1 : 0, 'Late server response must not start playback');
         assert.equal(player.calls.filter(c => c[0] === 'stop_playback').length, commands.length, 'Exit must stop an already requested native player');
@@ -122,13 +139,23 @@ function mount(protocol, pending) {
   }
   const loaded = mount('emby', 'media');
   await flush();
+  const startOptions = loaded.calls.find(call => call[0] === 'start_playback')[1].opts;
+  assert.equal(startOptions.title, 'Test');
+  assert.equal(startOptions.media_info.title, 'Test', 'Native OSD and window header must receive the same metadata title');
   loaded.events.get('mpv://ready')({ payload: null });
   assert(loaded.states.includes(false), 'Loaded media must dismiss the loading screen');
+  await loaded.key(' '); await loaded.key('Enter');
+  assert.deepEqual(loaded.calls.filter(call => call[0] === 'player_keyboard_action').map(call => call[1].key), ['SPACE', 'ENTER'],
+    'Keyboard input after Alt+Tab must reach mpv even when the webview has focus and no mouse click occurred');
+  await loaded.key(' ', true);
+  assert.equal(loaded.calls.filter(call => call[0] === 'player_keyboard_action').length, 2, 'Held Space must not repeatedly toggle playback');
   await loaded.escape();
   assert(loaded.calls.some(c => c[0] === 'player_escape'), 'Loaded Escape must go through the native modal stack even when the title bar has focus');
   assert(!loaded.calls.some(c => c[0] === 'navigate'), 'The frontend must not bypass an open native modal');
   loaded.close();
   assert.equal(loaded.calls.filter(c => c[0] === 'navigate').length, 1);
+  await loaded.key(' ');
+  assert.equal(loaded.calls.filter(call => call[0] === 'player_keyboard_action').length, 2, 'Exiting playback must ignore late keyboard actions');
   assert(!loaded.calls.some(c => c[0] === 'window-close'));
   loaded.cleanup();
   const failedBeforeReady = mount('emby', 'media');
