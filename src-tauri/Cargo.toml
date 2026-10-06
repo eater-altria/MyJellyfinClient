@@ -1,6 +1,6 @@
 [package]
 name = "my-jellyfin-client"
-version = "0.2.0"
+version = "0.2.1"
 description = "A Jellyfin Windows client with SenPlayer-style UI"
 authors = ["you"]
 edition = "2021"
