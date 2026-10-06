@@ -5,6 +5,7 @@ local quit = mp.commandv
 local observers, bindings, overlays, commands = {}, {}, {}, {}
 local messages = {}
 local cursor_zones = {}
+local capture_fails = false
 local utils = require('mp.utils')
 mp.register_script_message = function(name, callback) messages[name] = callback end
 local osd_messages = {}
@@ -13,12 +14,22 @@ local mouse = { x = 0, y = 0 }
 local dimensions = { w = 1280, h = 760 }
 local tracks, properties, timers, events = {}, {}, {}, {}
 local clock = 1
+local shader_opts, shader_updates = {['other/amount'] = '0.7'}, 0
+local target_params = {gamma = 'srgb'}
+mp.set_property_native = function(name, value)
+    assert(name == 'glsl-shader-opts')
+    shader_opts = value
+    shader_updates = shader_updates + 1
+    return true
+end
 mp.create_osd_overlay = function()
     local ov = { update = function() end }
     overlays[#overlays + 1] = ov
     return ov
 end
 mp.get_property_native = function(name)
+    if name == 'video-target-params' then return target_params end
+    if name == 'glsl-shader-opts' then return shader_opts end
     if name == 'osd-dimensions' then return dimensions end
     if name == 'mouse-pos' then return mouse end
     if name == 'track-list' then return tracks end
@@ -33,6 +44,11 @@ mp.add_periodic_timer = function(interval, callback) timers[interval] = callback
 mp.register_event = function(name, callback) events[name] = callback end
 mp.commandv = function(...)
     local command = {...}
+    if command[1] == 'screenshot-to-file' then
+        assert(tonumber(shader_opts['mjc-glass/surface_count']) == 0, 'Only the glass backing must be bypassed during capture')
+        if capture_fails then error('fixture capture failed') end
+        return true
+    end
     if command[1] == 'script-message' and command[2] == 'mjc-cursor-zones' then
         cursor_zones = utils.parse_json(command[3]) or {}
     else commands[#commands + 1] = command end
@@ -43,6 +59,15 @@ local function cursor_at(x, y)
         if x >= z.x0 and x <= z.x1 and y >= z.y0 and y <= z.y1 then return z.cursor end
     end
     return 'default'
+end
+local function glass_at(x, y)
+    for i = 1, tonumber(shader_opts['mjc-glass/surface_count']) do
+        local prefix = 'mjc-glass/r' .. i .. '_'
+        local rx, ry = tonumber(shader_opts[prefix .. 'x']), tonumber(shader_opts[prefix .. 'y'])
+        local rw, rh = tonumber(shader_opts[prefix .. 'w']), tonumber(shader_opts[prefix .. 'h'])
+        if x >= rx and x <= rx + rw and y >= ry and y <= ry + rh then return true end
+    end
+    return false
 end
 
 local function click(x, y)
@@ -89,6 +114,17 @@ local ok, err = pcall(function()
         if name == 'state' then controller = value; break end
     end
     assert(controller, 'Controller layout must be accessible to interaction tests')
+    assert(tonumber(shader_opts['mjc-glass/surface_count']) == 0, 'Loading must not blur the empty viewport')
+    assert(shader_opts['other/amount'] == '0.7', 'Glass parameters must preserve other shader options')
+    target_params.gamma = 'pq'
+    observers['video-target-params']('video-target-params', target_params)
+    assert(tonumber(shader_opts['mjc-glass/saturation']) == 1, 'PQ output must bypass the SDR saturation matrix')
+    target_params.gamma = 'hlg'
+    observers['video-target-params']('video-target-params', target_params)
+    assert(tonumber(shader_opts['mjc-glass/saturation']) == 1, 'HLG output must also preserve its color transform')
+    target_params.gamma = 'srgb'
+    observers['video-target-params']('video-target-params', target_params)
+    assert(tonumber(shader_opts['mjc-glass/saturation']) > 1, 'Returning to SDR must restore glass saturation')
     assert(not overlays[3].data:find('退出播放', 1, true), 'Playback exit belongs to the title-bar close button')
     assert(cursor_at(20, 20) == 'default', 'Removed exit button must not leave an invisible cursor region')
     assert(cursor_at(600, 350) == 'default', 'Video background must keep the default cursor')
@@ -102,6 +138,10 @@ local ok, err = pcall(function()
     properties['media-title'] = '测试影片'
     assert(overlays[1].res_x == 1280 and overlays[1].res_y == 760)
     assert(overlays[1].data:find('02:00', 1, true))
+    assert(glass_at(640, 750) and not glass_at(640, 350), 'Blur must follow the visible control surface')
+    local before_shader_updates = shader_updates
+    observers['time-pos']('time-pos', 121)
+    assert(shader_updates == before_shader_updates, 'Playback progress must not resend unchanged glass geometry')
     assert(control('sub') and control('audio'), 'Track actions must be icon controls')
     assert(not overlays[1].data:find('字幕', 1, true), 'Icon labels appear only on hover')
     mouse.x, mouse.y = center('sub')
@@ -112,6 +152,67 @@ local ok, err = pcall(function()
     assert(not overlays[1].data:find('字幕 · S', 1, true), 'Hover labels must disappear after leaving the icon')
     assert(cursor_control('seek') == 'pointer', 'Seek slider must have a hand cursor')
     assert(cursor_control('playpause') == 'pointer', 'Play button must have a hand cursor')
+    assert(cursor_control('volume-slider') == 'pointer', 'Volume slider must have its own native pointer region')
+    local function volume_point(fraction)
+        local slider = controller.volume_slider
+        return slider.x0 + (slider.x1 - slider.x0) * fraction, select(2, center('volume-slider'))
+    end
+    click(volume_point(0.25)); last('set', 'volume')
+    assert(commands[#commands][3] == '50', 'Enabled boost gives the slider its real 0-200 range')
+    mouse.x, mouse.y = volume_point(0.2)
+    bindings.mbtn_left({event = 'down'})
+    mouse.x = controller.volume_slider.x0 - 200
+    timers[0.03]()
+    assert(controller.volume == 0, 'Dragging beyond the left edge must clamp to zero')
+    clock = clock + 10; timers[0.25]()
+    assert(#controller.zones > 0, 'A held volume drag must keep the control bar visible')
+    mouse.x = controller.volume_slider.x1 + 200
+    bindings.mbtn_left({event = 'up'})
+    assert(controller.volume == 200 and not controller.volume_drag, 'Drag release must clamp to the boost limit and end the gesture')
+    messages['mjc-settings']('{"audioBoost":false}')
+    observers.mute('mute', true)
+    local before_volume = #commands + 1
+    click(volume_point(0.4)); last('set', 'volume')
+    assert(controller.volume == 40 and not controller.mute, 'A positive slider value must unmute and use the 0-100 range')
+    assert(has_command(before_volume, 'set', 'mute')[3] == 'no')
+    click_control('vol'); last('cycle', 'mute')
+    observers.mute('mute', true)
+    assert(controller.volume == 40, 'One-click mute must preserve the volume for restoration')
+    click_control('vol'); last('cycle', 'mute')
+    observers.mute('mute', false)
+    mouse.x, mouse.y = volume_point(0.6)
+    bindings.mbtn_left({event = 'down'})
+    messages['mjc-cancel-input']()
+    assert(not controller.volume_drag, 'Focus/capture loss must cancel the volume drag')
+    local volume_command_count = #commands
+    mouse.x = controller.volume_slider.x1 + 100
+    timers[0.03]()
+    assert(#commands == volume_command_count, 'A cancelled drag must not continue changing volume')
+    messages['mjc-settings']('{"audioBoost":true}')
+    observers.volume('volume', 100)
+    -- mpv mouse-pos deliberately remains stale while the captured host reports
+    -- coordinates outside both the slider and the video child window.
+    local px, py = volume_point(0.3)
+    messages['mjc-pointer']('down', tostring(px), tostring(py))
+    messages['mjc-pointer']('move', tostring(controller.volume_slider.x0 + (controller.volume_slider.x1 - controller.volume_slider.x0) * 0.8), '-100')
+    timers[0.03]()
+    assert(controller.volume_drag and controller.volume == 160, 'Captured volume dragging must continue above the slider even with stale mpv coordinates')
+    messages['mjc-pointer']('up', tostring(controller.volume_slider.x1 + 100), '-100')
+    assert(controller.volume == 200 and not controller.volume_drag and not controller.native_pointer,
+        'Releasing outside the slider must apply the final value and clear capture state')
+    px, py = center('seek')
+    messages['mjc-pointer']('down', tostring(px), tostring(py))
+    messages['mjc-pointer']('move', tostring(controller.seek.x1 + 100), '-100')
+    last('seek', commands[#commands][2])
+    assert(tonumber(commands[#commands][2]) == controller.duration and controller.seek_drag,
+        'Captured seeking must continue outside the seek bar and clamp to the duration')
+    messages['mjc-pointer']('up', tostring(controller.seek.x0 - 100), '10000')
+    assert(tonumber(commands[#commands][2]) == 0 and not controller.seek_drag, 'Releasing below the video must finish seeking at the captured position')
+    messages['mjc-pointer']('down', tostring(center('seek')), tostring(select(2, center('seek'))))
+    messages['mjc-cancel-input']()
+    assert(not controller.seek_drag and not controller.native_pointer, 'Losing native capture must cancel seeking as well')
+    observers.volume('volume', 100)
+    clock = clock + 1 -- End the control double-click suppression interval.
     assert(overlays[3].data:find('｛＼p1｝', 1, true), 'Title must escape ASS tags')
     for _, ov in ipairs(overlays) do
         for event in ov.data:gmatch('[^\n]+') do
@@ -137,6 +238,7 @@ local ok, err = pcall(function()
     messages['mjc-media-info']()
     assert(overlays[4].data:find('媒体信息', 1, true))
     assert(cursor_control('seek') == 'default', 'A modal must block cursor interaction with the controls underneath')
+    assert(cursor_control('volume-slider') == 'default', 'Media info must block the volume slider as well')
     assert(cursor_zones[1].cursor == 'pointer', 'Media info close action must have a hand cursor')
     assert(overlays[4].data:find('movie.mkv', 1, true))
     assert(not overlays[4].data:find('api_key=', 1, true))
@@ -209,12 +311,13 @@ local ok, err = pcall(function()
     assert(#controller.zones > 0, 'The 3-second interval must not hide controls early')
     clock = 103; timers[0.25]()
     assert(#controller.zones == 0, 'Idle controls must hide at 3 seconds')
+    assert(tonumber(shader_opts['mjc-glass/surface_count']) == 0, 'Auto-hide must bypass every GPU blur pass')
     assert(cursor_at(500, 722) == 'default', 'Auto-hidden controls must clear their interactive cursor regions')
     messages['mjc-settings']('{"autoHideControlsSeconds":5}')
-    clock = 2; observers['mouse-pos']('mouse-pos', mouse)
-    clock = 6.9; timers[0.25]()
+    clock = 200; observers['mouse-pos']('mouse-pos', mouse)
+    clock = 204.9; timers[0.25]()
     assert(#controller.zones > 0, 'Controls must remain visible before configured 5 seconds')
-    clock = 7.1; timers[0.25]()
+    clock = 205.1; timers[0.25]()
     assert(#controller.zones == 0, 'Controls must hide after configured 5 seconds')
     assert(cursor_at(500, 722) == 'default', 'Hidden controls must clear native cursor hit regions')
     observers['mouse-pos']('mouse-pos', mouse)
@@ -272,6 +375,7 @@ local ok, err = pcall(function()
     messages['mjc-key-down']('SPACE'); last('cycle', 'pause')
     observers.pause('pause', true)
     assert(#controller.zones == 0, 'Space must pause without waking the controls')
+    assert(not glass_at(640, 750) and glass_at(1200, 25), 'Hidden paused controls must blur only the pause badge')
     count = #commands; messages['mjc-key-down']('K')
     assert(#commands == count, 'Removed K lock shortcut must have no effect')
     clock = clock + 1
@@ -355,16 +459,17 @@ local ok, err = pcall(function()
     messages['mjc-settings']('{"showPlayTitleToast":false,"matchWindowToVideoRatio":false}')
     count = #osd_messages; events['file-loaded']()
     assert(#osd_messages == count, 'Disabled title toast')
-    count = #commands; observers['video-out-params']('video-out-params', {aspect = 1.7778})
-    assert(#commands == count, 'Disabled ratio matching must not resize')
     messages['mjc-settings']('{"showPlayTitleToast":true,"matchWindowToVideoRatio":true}')
     count = #osd_messages; events['file-loaded']()
     assert(#osd_messages == count + 1, 'Enabled title toast')
-    observers['video-out-params']('video-out-params', {aspect = 1.7778})
-    last('script-message', 'mjc-video-ratio')
     dimensions = {w = 1920, h = 1080}
     observers['osd-dimensions']('osd-dimensions', dimensions)
     assert(overlays[1].res_x == 1920 and overlays[1].res_y == 1080)
+    assert(glass_at(960, 1070) and not glass_at(640, 750), 'Resize must clear the previous backing rectangle')
+    dimensions.mt, dimensions.mb = 132, 132
+    observers['osd-dimensions']('osd-dimensions', dimensions)
+    assert(tonumber(shader_opts['mjc-glass/video_y']) == 132 and tonumber(shader_opts['mjc-glass/video_h']) == 816,
+        'Glass coordinates must account for letterbox margins')
     assert(cursor_control('seek') == 'pointer', 'Cursor regions must follow resized slider geometry')
     messages['mjc-settings']('{"autoLockOnPause":true}')
     observers.pause('pause', true)
@@ -375,9 +480,8 @@ local ok, err = pcall(function()
     last('set', 'panscan'); assert(commands[#commands][3] == '1', 'Crop-fill must use complete fill rather than 40 percent')
     click_control('more'); click_label(2, '缩放模式')
     assert(commands[#commands][3] == '0', 'Fit mode must restore contain scaling')
-    messages['mjc-frame-crop']('1920', '816', '0', '132', '1920', '1080')
-    local crop_command = has_command(1, 'set', 'video-crop')
-    assert(crop_command[3] == '1920x816+0+132', 'Fit must use the detected video content rectangle')
+    assert(not has_command(1, 'script-message', 'mjc-detect-frame') and not has_command(1, 'set', 'video-crop'),
+        'Fit mode must preserve the entire video without automatic black-padding detection or cropping')
 
     -- Resizing must reflow controls without shrinking their typography.
     messages['mjc-settings']('{"uiScale":1,"showSkipButtons":true,"showSwitchMediaButton":true,"showScreenshotButton":true}')
@@ -415,6 +519,8 @@ local ok, err = pcall(function()
     messages['mjc-ui-scale']('2')
     observers['osd-dimensions']('osd-dimensions', dimensions)
     assert(overlays[1].data:find('\\fs28',1,true), '200 percent DPI must preserve the 14 logical-pixel text size')
+    assert(tonumber(shader_opts['mjc-glass/ui_scale']) == 2 and glass_at(320, 400),
+        'DPI changes must scale the blur and the compact control surface together')
     messages['mjc-ui-scale']('1')
     dimensions = {w=320,h=240}
     observers['osd-dimensions']('osd-dimensions', dimensions)
@@ -424,9 +530,19 @@ local ok, err = pcall(function()
     bindings.wheel_down()
     assert(overlays[4].data ~= before, 'Small media information panels must scroll')
     messages['mjc-escape']()
+    local before_capture = shader_opts
+    messages['mjc-capture']('fixture-success', 'fixture.png', 'subtitles')
+    last('script-message', 'mjc-capture-result')
+    assert(commands[#commands][3] == 'fixture-success' and commands[#commands][4] == 'success')
+    assert(shader_opts == before_capture, 'A successful capture must restore every shader option')
+    capture_fails = true
+    messages['mjc-capture']('fixture-failure', 'fixture.png', 'video')
+    assert(commands[#commands][3] == 'fixture-failure' and commands[#commands][4] == 'error')
+    assert(shader_opts == before_capture, 'A failed capture must also restore the glass backing')
+    capture_fails = false
 end)
 if ok then
-    mp.msg.info('PASS: OSC drawing, exit, seeking, every native control setting, gestures, held-key speed restoration, paused navigation/fullscreen, hidden Space playback, audio boost, track memory, subtitle filtering/history, title toast and window ratio')
+    mp.msg.info('PASS: OSC drawing, glass geometry/hiding/DPI, capture restoration, exit, seeking, native controls, gestures, held-key speed restoration, paused navigation/fullscreen, hidden Space playback, audio boost, track memory, subtitle filtering/history and title toast')
 else
     mp.msg.error(err)
 end

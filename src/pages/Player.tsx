@@ -41,12 +41,14 @@ function SeekBar({
   buffered,
   onSeek,
   disabled = false,
+  onDraggingChange,
 }: {
   current: number;
   duration: number;
   buffered: [number, number][];
   onSeek: (t: number) => void;
   disabled?: boolean;
+  onDraggingChange?: (dragging: boolean) => void;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
@@ -82,8 +84,10 @@ function SeekBar({
       className={`group relative flex h-5 items-center ${disabled || duration <= 0 ? 'cursor-not-allowed' : 'cursor-pointer'}`}
       onPointerDown={(e) => {
         if (disabled || duration <= 0) return;
+        e.preventDefault();
         draggingRef.current = true;
         e.currentTarget.setPointerCapture(e.pointerId);
+        onDraggingChange?.(true);
         if (duration > 0) onSeek(frac(e.clientX) * duration);
       }}
       onPointerMove={(e) => {
@@ -93,12 +97,15 @@ function SeekBar({
         setHoverT(duration > 0 ? f * duration : null);
         if (draggingRef.current && duration > 0) onSeek(f * duration);
       }}
-      onPointerUp={() => {
+      onPointerUp={e => {
+        if (draggingRef.current && duration > 0) onSeek(frac(e.clientX) * duration);
         draggingRef.current = false;
+        onDraggingChange?.(false);
       }}
-      onPointerCancel={() => { draggingRef.current = false; }}
+      onPointerCancel={() => { draggingRef.current = false; onDraggingChange?.(false); }}
+      onLostPointerCapture={() => { draggingRef.current = false; onDraggingChange?.(false); }}
       onPointerLeave={() => {
-        setHoverT(null);
+        if (!draggingRef.current) setHoverT(null);
       }}
     >
       <div
@@ -140,13 +147,16 @@ function VolumeSlider({
   muted,
   onChange,
   disabled = false,
+  onDraggingChange,
 }: {
   volume: number;
   muted: boolean;
   onChange: (v: number) => void;
   disabled?: boolean;
+  onDraggingChange?: (dragging: boolean) => void;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
+  const draggingRef = useRef(false);
   const set = (clientX: number) => {
     if (disabled) return;
     const el = trackRef.current;
@@ -157,17 +167,36 @@ function VolumeSlider({
   const pct = (muted ? 0 : volume) * 100;
   return (
     <div
-      className={`flex h-6 w-20 items-center ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+      className={`player-volume-slider flex h-6 items-center ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+      role="slider" aria-label="音量" aria-valuemin={0} aria-valuemax={100}
+      aria-valuenow={Math.round(pct)} aria-disabled={disabled} tabIndex={disabled ? -1 : 0}
       onPointerDown={(e) => {
+        if (disabled) return;
+        e.preventDefault();
+        draggingRef.current = true;
         e.currentTarget.setPointerCapture(e.pointerId);
+        onDraggingChange?.(true);
         set(e.clientX);
       }}
+      onPointerUp={e => { if (draggingRef.current) set(e.clientX); draggingRef.current = false; onDraggingChange?.(false); }}
+      onPointerCancel={() => { draggingRef.current = false; onDraggingChange?.(false); }}
+      onLostPointerCapture={() => { draggingRef.current = false; onDraggingChange?.(false); }}
+      onBlur={() => { draggingRef.current = false; onDraggingChange?.(false); }}
+      onKeyDown={e => {
+        if (disabled) return;
+        const values: Record<string, number> = { ArrowRight: volume + 0.05, ArrowUp: volume + 0.05,
+          ArrowLeft: volume - 0.05, ArrowDown: volume - 0.05, Home: 0, End: 1 };
+        if (!(e.key in values)) return;
+        e.preventDefault(); e.stopPropagation();
+        onChange(Math.max(0, Math.min(1, values[e.key])));
+      }}
       onPointerMove={(e) => {
-        if (e.buttons === 1) set(e.clientX);
+        if (draggingRef.current) set(e.clientX);
       }}
     >
       <div ref={trackRef} className="relative h-1 w-full rounded bg-white/30">
         <div className="absolute inset-y-0 left-0 rounded bg-white" style={{ width: `${pct}%` }} />
+        <div className="absolute top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white" style={{ left: `${pct}%` }} />
       </div>
     </div>
   );
@@ -195,6 +224,8 @@ export default function PlayerPage() {
   const generationRef = useRef(0);
   const switchingRef = useRef(false);
   const corsRetriedRef = useRef(false);
+  const volumeDraggingRef = useRef(false);
+  const seekDraggingRef = useRef(false);
 
   const [item, setItem] = useState<BaseItem | null>(null);
   const [loading, setLoading] = useState(true);
@@ -242,9 +273,11 @@ export default function PlayerPage() {
     window.clearTimeout(hideTimerRef.current);
     const secs = useSettings.getState().autoHideControlsSeconds;
     hideTimerRef.current = window.setTimeout(() => {
-      if (!controlsMenuRef.current) setControls(false);
+      if (!controlsMenuRef.current && !volumeDraggingRef.current && !seekDraggingRef.current) setControls(false);
     }, Math.max(1, secs) * 1000);
   }, [setControls]);
+  const onVolumeDragging = (dragging: boolean) => { volumeDraggingRef.current = dragging; poke(); };
+  const onSeekDragging = (dragging: boolean) => { seekDraggingRef.current = dragging; poke(); };
 
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
@@ -758,7 +791,7 @@ export default function PlayerPage() {
             {settings.subtitleSearchHistory && <datalist id="subtitle-search-history">{subSearches.map(q => <option key={q} value={q} />)}</datalist>}
           </>}
           <div className="player-menu-field">音量
-            <VolumeSlider volume={volume} muted={muted} onChange={changeVolume} />
+            <VolumeSlider volume={volume} muted={muted} onChange={changeVolume} onDraggingChange={onVolumeDragging} />
           </div>
           <div className="player-compact-actions">
             {settings.showSwitchMediaButton && <>
@@ -776,6 +809,7 @@ export default function PlayerPage() {
           <div className="player-timeline flex items-center gap-4 text-sm tabular-nums">
             <span className="text-white/95">{formatTime(currentTime)}</span>
             <div className="min-w-0 flex-1"><SeekBar current={currentTime} duration={duration} buffered={buffered}
+              onDraggingChange={onSeekDragging}
               onSeek={t => {
                 const v = videoRef.current;
                 if (v) {
@@ -803,6 +837,7 @@ export default function PlayerPage() {
               <button onClick={() => {
                 const v = videoRef.current; if (v) v.muted = !v.muted;
               }} className="player-control-button" aria-pressed={muted} aria-label={muted ? '取消静音 · M' : '静音 · M'} data-tooltip={muted ? '取消静音 · M' : '静音 · M'}><span className="player-icon-ring"><IconVolume size={14} /></span></button>
+              <VolumeSlider volume={volume} muted={muted} onChange={v => { changeVolume(v); poke(); }} onDraggingChange={onVolumeDragging} />
               <button onClick={toggleFullscreen} className="player-control-button" aria-label={isFullscreen ? '退出全屏' : '全屏 · 回车'} data-tooltip={isFullscreen ? '退出全屏' : '全屏 · 回车'}><IconFullscreen size={18} /></button>
               <button onClick={() => { showControlsMenu(!controlsMenu); poke(); }} className="player-control-button" aria-label="更多" data-tooltip="更多" aria-expanded={controlsMenu}><span className="player-icon-ring"><IconMore size={14} /></span></button>
             </div>

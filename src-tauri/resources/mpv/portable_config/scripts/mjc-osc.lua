@@ -29,7 +29,7 @@ local state = {
         mouseLeftDoubleClick = 'playpause', mouseRightClick = 'toggleControls',
         doubleClickMilliseconds = 500,
         subtitleSearchHistory = true, rememberAudioTrack = true,
-        rememberSubtitle = true, matchWindowToVideoRatio = true, audioBoost = true,
+        rememberSubtitle = true, audioBoost = true,
     },
     held_key = nil,
     volume_key = nil,
@@ -58,8 +58,9 @@ local state = {
     menu_anchors = {},
     top_zones = {},
     seek_drag = false,
+    volume_drag = false,
+    volume_slider = nil,
     fill_window = false,
-    frame_crop = nil,
     seek = nil,          -- {x0,y0,x1,y1} of the seekbar
 }
 
@@ -117,13 +118,81 @@ local function text_width(str, fs)
     return w
 end
 
+-- ---------- GPU glass backing ----------
+-- Keep the backing geometry with the ASS layout; time-pos updates need not
+-- resend identical parameters or rebuild the blur. Six surfaces cover the bar,
+-- pause badge, side tools, hover label, menu and media info.
+local glass_layers, glass_layer = {}, nil
+local rendering_all = false
+local last_glass_params = ''
+local glass_supported = true
+local GLASS_SURFACES = 6
+-- Material defaults inspired by rdev/liquid-glass-react/src/index.tsx.
+-- Its blurAmount maps to 4 + 32 * amount CSS pixels over a normal background.
+-- These are appearance constants, independent of playback settings/layout.
+local GLASS_MATERIAL = {
+    displacement_scale = 70, blur_amount = 0.0625,
+    saturation_percent = 140, aberration_intensity = 2,
+}
+local function begin_glass(layer)
+    glass_layers[layer] = {}
+    glass_layer = glass_layers[layer]
+end
+local function glass_surface(x0, y0, x1, y1, radius)
+    if glass_layer and x1 > x0 and y1 > y0 then
+        glass_layer[#glass_layer + 1] = {x0, y0, x1 - x0, y1 - y0, radius}
+    end
+end
+local function publish_glass()
+    if rendering_all or not glass_supported then return end
+    local dim = mp.get_property_native('osd-dimensions') or {}
+    local x, y = tonumber(dim.ml) or 0, tonumber(dim.mt) or 0
+    local w = math.max(1, state.osd_w - x - (tonumber(dim.mr) or 0))
+    local h = math.max(1, state.osd_h - y - (tonumber(dim.mb) or 0))
+    local surfaces = {}
+    for _, layer in ipairs({'bar', 'top', 'menu', 'info'}) do
+        for _, rect in ipairs(glass_layers[layer] or {}) do
+            if #surfaces < GLASS_SURFACES then surfaces[#surfaces + 1] = rect end
+        end
+    end
+    local values = {surface_count = #surfaces, video_x = x, video_y = y,
+        video_w = w, video_h = h, ui_scale = state.ui_scale}
+    local target = mp.get_property_native('video-target-params') or {}
+    -- Do not apply an SDR saturation matrix to PQ/HLG or linear HDR output.
+    local hdr = target.gamma == 'pq' or target.gamma == 'hlg' or target.gamma == 'linear'
+    values.displacement_scale = GLASS_MATERIAL.displacement_scale
+    values.blur_px = 4 + 32 * GLASS_MATERIAL.blur_amount
+    values.saturation = hdr and 1 or GLASS_MATERIAL.saturation_percent / 100
+    values.aberration_intensity = GLASS_MATERIAL.aberration_intensity
+    for i = 1, GLASS_SURFACES do
+        local rect = surfaces[i] or {0, 0, 0, 0, 0}
+        for j, field in ipairs({'x', 'y', 'w', 'h', 'radius'}) do
+            values['r' .. i .. '_' .. field] = rect[j]
+        end
+    end
+    local keys, signature = {}, {}
+    for key in pairs(values) do keys[#keys + 1] = key end
+    table.sort(keys)
+    for _, key in ipairs(keys) do signature[#signature + 1] = string.format('%.3f', values[key]) end
+    signature = table.concat(signature, ',')
+    if signature == last_glass_params then return end
+    local opts = mp.get_property_native('glsl-shader-opts') or {}
+    for _, key in ipairs(keys) do opts['mjc-glass/' .. key] = string.format('%.3f', values[key]) end
+    local ok, err = mp.set_property_native('glsl-shader-opts', opts)
+    if not ok then
+        glass_supported = false
+        mp.msg.warn('Glass backing unavailable; keeping translucent controls: ' .. tostring(err))
+    end
+    last_glass_params = signature
+end
+
 -- ---------- drawing primitives ----------
 local function new_ass()
     local a = assdraw.ass_new()
     local new_event = a.new_event
     function a:new_event()
         new_event(self)
-        self:append('{\\r\\bord0\\shad0\\fscx100\\fscy100}')
+        self:append('{\\r\\bord0\\shad0\\blur0\\fscx100\\fscy100}')
     end
     return a
 end
@@ -138,10 +207,10 @@ local function rrect_path(a, x0, y0, x1, y1, r)
     end
 end
 
-local function draw_round_rect(a, x0, y0, x1, y1, r, color)
+local function draw_round_rect(a, x0, y0, x1, y1, r, color, blur)
     a:new_event()
     a:pos(0, 0)
-    a:append('{\\an7\\p4\\c' .. color .. '\\bord0\\shad0}')
+    a:append('{\\an7\\p4\\c' .. color .. '\\bord0\\shad0' .. (blur and '\\blur' .. blur or '') .. '}')
     rrect_path(a, x0, y0, x1, y1, r)
     a:append('{\\p0}')
 end
@@ -267,11 +336,14 @@ local function draw_switch_icon(a, cx, cy, s, color, direction)
 end
 
 local function draw_surface(a, x0, y0, x1, y1, radius, scale)
+    glass_surface(x0, y0, x1, y1, radius)
     draw_round_rect(a, x0 - 3 * scale, y0 + 4 * scale, x1 + 3 * scale, y1 + 5 * scale,
-        radius + 3 * scale, ass_color(0.10, 0, 0, 0))
+        radius + 3 * scale, ass_color(0.10, 0, 0, 0), 2 * scale)
     draw_round_rect(a, x0, y0, x1, y1, radius, ass_color(0.12, 1, 1, 1))
     draw_round_rect(a, x0 + scale, y0 + scale, x1 - scale, y1 - scale, radius - scale,
-        ass_color(0.58, 0.035, 0.035, 0.035))
+        ass_color(0.28, 0.035, 0.035, 0.035))
+    draw_round_rect(a, x0 + radius, y0 + scale, x1 - radius, y0 + 2 * scale,
+        0, ass_color(0.18, 1, 1, 1))
 end
 
 local function draw_ring(a, cx, cy, radius, thickness, color)
@@ -371,6 +443,7 @@ end
 
 -- mouse-pos is in the same coordinate space as osd-dimensions
 local function mouse_pos()
+    if state.native_pointer then return state.native_pointer.x, state.native_pointer.y end
     local pos = mp.get_property_native('mouse-pos')
     if not pos then return -1, -1 end
     return pos.x, pos.y
@@ -382,8 +455,8 @@ local function cmd(...) mp.commandv(...) end
 -- Publish the same visible hit regions used for clicks. Win32 can then select
 -- its cursor immediately, without waiting for an IPC round trip on each move.
 local last_cursor_zones = ''
-local rendering_all = false
 local function publish_cursor_zones()
+    publish_glass()
     if rendering_all then return end
     local zones = {}
     local function append(source)
@@ -444,7 +517,6 @@ local function toggle_hwdec()
     state.hwdec = mp.get_property('hwdec') or 'auto-safe'
 end
 local function toggle_panscan()
-    if not state.frame_crop then cmd('script-message', 'mjc-detect-frame') end
     state.fill_window = not state.fill_window
     cmd('set', 'keepaspect', 'yes')
     cmd('set', 'video-unscaled', 'no')
@@ -478,6 +550,7 @@ end
 
 local function render_info()
     update_ov_size()
+    begin_glass('info')
     state.info_zones = {}
     if not state.info_visible then
         info_ov.data = ''; info_ov:update(); publish_cursor_zones(); return
@@ -586,12 +659,35 @@ local function seek_frac_at(x)
     return clamp((x - s.x0) / (s.x1 - s.x0), 0, 1)
 end
 
+local function volume_maximum()
+    local actual = mp.get_property_number('options/volume-max')
+    if actual and actual > 0 then return math.min(actual, 200) end
+    return state.settings.audioBoost and 200 or 100
+end
+
+local function volume_at(x)
+    local slider = state.volume_slider
+    if not slider then return end
+    local maximum = volume_maximum()
+    local volume = math.floor(clamp((x - slider.x0) / (slider.x1 - slider.x0), 0, 1) * maximum + 0.5)
+    if volume > 0 and state.mute then
+        state.mute = false
+        cmd('set', 'mute', 'no')
+    end
+    if volume ~= state.volume then
+        state.volume = volume
+        cmd('set', 'volume', tostring(volume))
+    end
+end
+
 -- ---------- render bar ----------
 function render_bar()
     update_ov_size()
+    begin_glass('bar')
     local w, h, scale = state.osd_w, state.osd_h, state.ui_scale
     local a = new_ass()
     state.zones, state.menu_anchors, state.seek, state.bar_bounds = {}, {}, nil, nil
+    state.volume_slider = nil
     local has_video = state.duration > 0
     local show_full = state.visible or state.persistent
     local mx, my = mouse_pos()
@@ -607,7 +703,14 @@ function render_bar()
         draw_text(a, px + 36 * scale, py + 6 * scale, 12 * scale, fg, '已暂停')
     end
     if show_full and has_video then
-        local compact, tiny = w < 640 * scale, w < 440 * scale
+        local transport_count = 1 + (state.settings.showSwitchMediaButton and 2 or 0)
+            + (state.settings.showSkipButtons and 2 or 0)
+        -- Fold or reflow before the new slider crowds transport or seeking.
+        local tiny = w < 440 * scale or w < (transport_count * 34 + 6 * 34 + 76 + 24) * scale
+        local volume_width = (tiny and 48 or 64) * scale
+        local control_width = ((tiny and 1 or transport_count) * 34 + (tiny and 3 or 6) * 34 + 36) * scale + volume_width
+        local times_width = text_width(fmt_time(state.timepos), 14 * scale) + text_width(fmt_time(state.duration), 14 * scale)
+        local compact = w < 640 * scale or w < control_width + times_width + 136 * scale
         state.narrow_controls, state.tiny_controls = tiny, tiny
         local bh = (compact and 88 or 52) * scale
         local by, pad, bw = h - bh, 12 * scale, 34 * scale
@@ -616,8 +719,9 @@ function render_bar()
         state.bar_top = by
         state.bar_bounds = {x0 = 0, y0 = by, x1 = w, y1 = h}
         -- Separate opacities make the surface and the timeline read as distinct layers.
+        glass_surface(0, by, w, h, 10 * scale)
         draw_round_rect(a, 0, by, w, h, 10 * scale, ass_color(0.08, 1, 1, 1))
-        draw_round_rect(a, scale, by + scale, w - scale, h, 9 * scale, ass_color(0.42, 0, 0, 0))
+        draw_round_rect(a, scale, by + scale, w - scale, h, 9 * scale, ass_color(0.20, 0, 0, 0))
         draw_round_rect(a, 10 * scale, by, w - 10 * scale, by + scale, 0, ass_color(0.10, 1, 1, 1))
         local tooltip, tooltip_x
         local function feedback(x, y, width, height, label, selected)
@@ -666,12 +770,15 @@ function render_bar()
         end
         rbtn('more', '更多')
         rbtn('fs', '全屏 · 回车')
-        rbtn('vol', state.mute and '取消静音 · M' or '音量 ' .. math.floor(state.volume) .. '% · M 静音')
         if not tiny then
             rbtn('speed', '倍速 ' .. tostring(state.speed) .. 'x')
             rbtn('sub', '字幕 · S')
             rbtn('audio', '音轨 · A')
         end
+        local vx1 = rx - 8 * scale
+        local vx0 = vx1 - volume_width
+        rx = vx0 - 4 * scale
+        rbtn('vol', state.mute and '取消静音 · M' or '音量 ' .. math.floor(state.volume) .. '% · M 静音')
         for _, slot in ipairs(slots) do
             local id, cx = slot.id, slot.x + bw / 2
             local color = fg
@@ -685,6 +792,20 @@ function render_bar()
                 else toggle_menu(id); state.sub_searching = false; state.menu_offset = 0 end
                 render_all()
             end, id)
+        end
+        state.volume_slider = {x0 = vx0, x1 = vx1}
+        local hover_volume = not state.menu and not state.info_visible
+            and mx >= vx0 - 4 * scale and mx <= vx1 + 4 * scale and my >= row_y and my <= row_y + row_h
+        local vh = (hover_volume or state.volume_drag) and 4 * scale or 3 * scale
+        local maximum = volume_maximum()
+        local value = state.mute and 0 or clamp(state.volume / maximum, 0, 1)
+        local knob = vx0 + (vx1 - vx0) * value
+        draw_round_rect(a, vx0, cy - vh / 2, vx1, cy + vh / 2, vh / 2, ass_color(0.30, 1, 1, 1))
+        if knob > vx0 then draw_round_rect(a, vx0, cy - vh / 2, knob, cy + vh / 2, vh / 2, ass_color(0.82, 1, 1, 1)) end
+        draw_round_rect(a, knob - 4 * scale, cy - 4 * scale, knob + 4 * scale, cy + 4 * scale, 4 * scale, fg)
+        zone(state.zones, vx0 - 4 * scale, row_y, vx1 + 4 * scale, row_y + row_h, function() end, 'volume-slider')
+        if hover_volume or state.volume_drag then
+            tooltip, tooltip_x = '音量 ' .. math.floor(state.volume) .. '%' .. (state.mute and ' · 已静音' or ''), (vx0 + vx1) / 2
         end
         local fs = 14 * scale
         local ty = compact and by + 19 * scale or cy
@@ -750,6 +871,7 @@ end
 -- ---------- top bar ----------
 function render_top()
     update_ov_size()
+    begin_glass('top')
     local w = state.osd_w
     local scale = state.ui_scale
     local a = new_ass()
@@ -803,6 +925,7 @@ end
 
 function render_menu()
     update_ov_size()
+    begin_glass('menu')
     local a = new_ass()
     state.menu_zones = {}
     local w, h = state.osd_w, state.osd_h
@@ -1107,6 +1230,7 @@ mp.observe_property('volume', 'number', function(_, v)
     state.volume = v or 100
     render_bar()
 end)
+mp.observe_property('options/volume-max', 'number', function() render_bar() end)
 mp.observe_property('mute', 'bool', function(_, v)
     state.mute = v or false; render_all()
 end)
@@ -1129,14 +1253,7 @@ mp.observe_property('demuxer-cache-state', 'native', function(_, v)
 end)
 
 mp.observe_property('osd-dimensions', 'native', function() render_all() end)
-mp.observe_property('video-out-params', 'native', function(_, v)
-    if state.settings.matchWindowToVideoRatio and type(v) == 'table' then
-        local aspect = tonumber(v.aspect) or (v.dw and v.dh and v.dh > 0 and v.dw / v.dh)
-        if state.frame_crop then aspect = state.frame_crop.aspect end
-        if aspect and aspect > 0 then cmd('script-message', 'mjc-video-ratio', tostring(aspect)) end
-    end
-end)
-
+mp.observe_property('video-target-params', 'native', function() render_all() end)
 -- ---------- input ----------
 local function activity()
     state.last_active = mp.get_time()
@@ -1158,6 +1275,9 @@ local function finish_hold()
     if held and held.active then set_speed(held.previous_speed) end
     state.held_key = nil
     state.volume_key = nil
+    state.volume_drag = false
+    state.seek_drag = false
+    state.native_pointer = nil
 end
 
 local function relative_seek(direction)
@@ -1205,7 +1325,7 @@ local function on_key(key, down)
     elseif key == 'M' then cmd('cycle', 'mute')
     elseif key == 'UP' or key == 'DOWN' then
         if state.volume_key and state.volume_key.key == key then return end
-        local volume = clamp(state.volume + (key == 'UP' and 5 or -5), 0, state.settings.audioBoost and 200 or 100)
+        local volume = clamp(state.volume + (key == 'UP' and 5 or -5), 0, volume_maximum())
         cmd('set', 'volume', tostring(volume))
         state.volume_key = { key = key, since = mp.get_time(), last = mp.get_time() }
     elseif key == 'S' then
@@ -1247,6 +1367,10 @@ local function on_mbtn_left(event)
                 state.seek_drag = true
                 seek_to_frac(seek_frac_at(x))
                 render_bar()
+            elseif z.name == 'volume-slider' then
+                state.volume_drag = true
+                volume_at(x)
+                render_bar()
             else
                 z.action()
             end
@@ -1258,6 +1382,12 @@ local function on_mbtn_left(event)
             state.pending_click = mp.get_time() + clamp(tonumber(state.settings.doubleClickMilliseconds) or 500, 100, 1500) / 1000
         end
     elseif event.event == 'up' then
+        if state.volume_drag then
+            volume_at(x)
+            state.volume_drag = false
+            activity()
+            render_bar()
+        end
         if state.seek_drag then
             state.seek_drag = false
             seek_to_frac(seek_frac_at(x))
@@ -1272,6 +1402,11 @@ mp.register_script_message('mjc-settings', function(json)
     finish_hold()
     for key, value in pairs(settings) do
         if key ~= 'autoLockOnPause' then state.settings[key] = value end
+    end
+    if settings.audioBoost ~= nil then
+        local maximum = settings.audioBoost and 200 or 100
+        cmd('set', 'volume-max', tostring(maximum))
+        if state.volume > maximum then state.volume = maximum; cmd('set', 'volume', tostring(maximum)) end
     end
     state.ui_scale = clamp(tonumber(settings.uiScale) or state.ui_scale, 0.5, 4)
     state.rewind_seconds = clamp(tonumber(settings.rewindSeconds) or state.rewind_seconds, 1, 600)
@@ -1291,21 +1426,27 @@ mp.register_script_message('mjc-ui-scale', function(value)
     render_all()
 end)
 
-mp.register_script_message('mjc-frame-crop', function(width, height, x, y, source_width, source_height)
-    local w, h, sx, sy, sw, sh = tonumber(width), tonumber(height), tonumber(x), tonumber(y), tonumber(source_width), tonumber(source_height)
-    if not w or not h or not sx or not sy or not sw or not sh or w <= 0 or h <= 0 or sx < 0 or sy < 0 or sx + w > sw or sy + h > sh then return end
-    local params = mp.get_property_native('video-out-params') or {}
-    local original = tonumber(params.aspect) or sw / sh
-    state.frame_crop = { w = w, h = h, sw = sw, sh = sh, aspect = original * (w / sw) / (h / sh) }
-    cmd('set', 'video-crop', string.format('%dx%d+%d+%d', w, h, sx, sy))
-    if state.settings.matchWindowToVideoRatio then
-        cmd('script-message', 'mjc-video-ratio', tostring(state.frame_crop.aspect))
-    end
-end)
-
 mp.register_script_message('mjc-key-down', function(key) on_key(key, true) end)
 mp.register_script_message('mjc-key-up', function(key) on_key(key, false) end)
 mp.register_script_message('mjc-cancel-input', function() finish_hold(); state.pending_click = nil end)
+-- The Win32 host owns capture. Read its actual coordinates while held instead
+-- of relying on mpv key-section hit testing or its clipped mouse-pos property.
+mp.register_script_message('mjc-pointer', function(event, sx, sy)
+    local x, y = tonumber(sx), tonumber(sy)
+    if not x or not y or x ~= x or y ~= y then return end
+    state.native_pointer = {x = x, y = y}
+    if event == 'down' then
+        on_mbtn_left({event = 'down'})
+    elseif event == 'move' then
+        activity()
+        if state.volume_drag then volume_at(x)
+        elseif state.seek_drag then seek_to_frac(seek_frac_at(x)) end
+        render_bar()
+    elseif event == 'up' then
+        on_mbtn_left({event = 'up'})
+        state.native_pointer = nil
+    end
+end)
 mp.register_script_message('mjc-text-input', function(text)
     if state.sub_searching and type(text) == 'string' and #state.sub_query < 128 then
         text = text:gsub('[%z\1-\31\127]', '')
@@ -1340,6 +1481,30 @@ end)
 mp.register_script_message('mjc-escape', escape)
 mp.register_script_message('mjc-media-info', show_media_info)
 
+-- gpu-next also runs OUTPUT hooks for video screenshots. Serialize captures in
+-- this Lua callback and restore parameters even on failure, so saved frames
+-- retain the normal GPU color/subtitle pipeline.
+mp.register_script_message('mjc-capture', function(token, path, mode)
+    if mode ~= 'video' and mode ~= 'subtitles' then return end
+    local opts = mp.get_property_native('glsl-shader-opts') or {}
+    local enabled = (tonumber(opts['mjc-glass/surface_count']) or 0) > 0
+    local ready, disable_error = true, nil
+    if enabled then
+        local disabled = {}
+        for key, value in pairs(opts) do disabled[key] = value end
+        disabled['mjc-glass/surface_count'] = '0'
+        ready, disable_error = mp.set_property_native('glsl-shader-opts', disabled)
+    end
+    local called, success, err = false, false, disable_error
+    if ready then called, success, err = pcall(mp.commandv, 'screenshot-to-file', path, mode) end
+    if enabled then
+        local restored = mp.set_property_native('glsl-shader-opts', opts)
+        if not restored then last_glass_params = ''; publish_glass() end
+    end
+    mp.commandv('script-message', 'mjc-capture-result', token,
+        called and success and 'success' or 'error', tostring(err or ''))
+end)
+
 mp.add_forced_key_binding('mbtn_left', 'mjc-osc-mbtn-left', on_mbtn_left, { complex = true })
 
 mp.add_forced_key_binding('mbtn_right', 'mjc-osc-mbtn-right', function()
@@ -1372,7 +1537,7 @@ for _, direction in ipairs({'wheel_up', 'wheel_down'}) do
         if state.menu then
             state.menu_offset = math.max(0, state.menu_offset + delta); render_menu()
         else
-            local volume = clamp(state.volume + (delta < 0 and 2 or -2), 0, state.settings.audioBoost and 200 or 100)
+            local volume = clamp(state.volume + (delta < 0 and 2 or -2), 0, volume_maximum())
             cmd('set', 'volume', tostring(volume))
         end
     end)
@@ -1393,19 +1558,23 @@ mp.add_periodic_timer(0.03, function()
     if volume_key and mp.get_time() - volume_key.since >= 0.35
         and mp.get_time() - volume_key.last >= 0.1 then
         volume_key.last = mp.get_time()
-        local volume = clamp(state.volume + (volume_key.key == 'UP' and 5 or -5), 0, state.settings.audioBoost and 200 or 100)
+        local volume = clamp(state.volume + (volume_key.key == 'UP' and 5 or -5), 0, volume_maximum())
         cmd('set', 'volume', tostring(volume))
     end
     if state.seek_drag then
         local x = mouse_pos()
         seek_to_frac(seek_frac_at(x))
     end
+    if state.volume_drag then
+        volume_at(mouse_pos())
+        render_bar()
+    end
 end)
 
 -- ---------- autohide ----------
 mp.add_periodic_timer(0.25, function()
     if state.info_visible then render_info() end
-    if state.visible and not state.persistent and not state.menu and not state.info_visible and not state.seek_drag then
+    if state.visible and not state.persistent and not state.menu and not state.info_visible and not state.seek_drag and not state.volume_drag then
         if mp.get_time() - state.last_active >= (tonumber(state.settings.autoHideControlsSeconds) or 3) then
             state.visible = false
             render_all()

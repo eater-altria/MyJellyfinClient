@@ -4,6 +4,7 @@ use super::{pipe_write, screenshot_format, setting_bool, wide, write_json, Playe
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
@@ -48,6 +49,24 @@ fn prepare_capture_target(directories: &[PathBuf], format: &str) -> Result<Captu
     Err("截图保存位置不可写，请检查图片或应用数据目录的访问权限".into())
 }
 
+/// Lua serializes captures with its UI state, bypassing only the glass shader
+/// during GPU readback. A separate IPC reader waits for the actual result.
+pub(super) fn capture_frame(pipe_path: &str, path: &Path, mode: &str) -> Result<(), String> {
+    static NEXT_CAPTURE: AtomicU64 = AtomicU64::new(1);
+    let token = NEXT_CAPTURE.fetch_add(1, Ordering::Relaxed).to_string();
+    let mut file = std::fs::OpenOptions::new().read(true).write(true).open(pipe_path).map_err(|e| e.to_string())?;
+    write_json(&mut file, &json!({"command": ["script-message", "mjc-capture", token, path.to_string_lossy(), mode], "request_id": 1}))
+        .map_err(|e| e.to_string())?;
+    for line in BufReader::new(file).lines() {
+        let value: Value = serde_json::from_str(&line.map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        if value["request_id"] == 1 && value["error"] != "success" { return Err("当前画面无法截图".into()); }
+        if value["event"] == "client-message" && value["args"][0] == "mjc-capture-result" && value["args"][1] == token {
+            return if value["args"][2] == "success" { Ok(()) } else { Err("当前画面无法截图".into()) };
+        }
+    }
+    Err("播放器已结束，截图未生成".into())
+}
+
 pub(super) fn request(app: &AppHandle, pid: u32, pipe_path: &str, pipe: &Sender<Value>, settings: &Value) {
     let app = app.clone();
     let pipe_path = pipe_path.to_string();
@@ -66,18 +85,8 @@ pub(super) fn request(app: &AppHandle, pid: u32, pipe_path: &str, pipe: &Sender<
             // A separate IPC connection returns the actual screenshot result.
             // The event reader and UI command worker remain responsive.
             if !app.state::<PlayerState>().session.lock().unwrap().as_ref().is_some_and(|s| s.pid == pid) { return Err("播放已结束".into()); }
-            let mut file = std::fs::OpenOptions::new().read(true).write(true).open(&pipe_path).map_err(|e| e.to_string())?;
-            write_json(&mut file, &json!({"command": ["screenshot-to-file", path.to_string_lossy(), "subtitles"], "request_id": 1})).map_err(|e| e.to_string())?;
-            let mut succeeded = false;
-            for line in BufReader::new(file).lines() {
-                let value: Value = serde_json::from_str(&line.map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-                if value["request_id"] == 1 {
-                    if value["error"] != "success" { return Err("当前画面无法截图".into()); }
-                    succeeded = true;
-                    break;
-                }
-            }
-            if !succeeded || std::fs::metadata(&path).map(|metadata| metadata.len() == 0).unwrap_or(true) { return Err("截图未生成".into()); }
+            capture_frame(&pipe_path, &path, "subtitles")?;
+            if std::fs::metadata(&path).map(|metadata| metadata.len() == 0).unwrap_or(true) { return Err("截图未生成".into()); }
             target.complete = true;
             let dib = if copy { Some(decode_dib(&path)) } else { None };
             Ok((path, dib))

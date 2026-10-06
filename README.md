@@ -28,9 +28,9 @@
 
 加载期间也可退出并取消请求。原生播放器使用 Windows 信任证书校验 HTTPS，支持音轨字幕偏好、截图、响应式控制栏，以及适应窗口/裁切填充。
 
-播放器标题使用媒体元数据；控制栏采用半透明背景、白色图标、悬浮文字提示和半透明菜单，默认静止 3 秒后隐藏。Alt+Tab 返回应用后可直接使用空格、回车。截图优先保存在系统图片目录的 `MyJellyfinClient` 文件夹，不可写时使用应用本地数据目录；开发版使用开发数据目录下的 `screenshots`，保存成功会显示实际路径。
+播放器标题使用媒体元数据；原生控制栏和菜单采用半透明玻璃背景，包含实时背景模糊、边缘折射及轻微色散，配合白色图标及悬浮文字提示，默认静止 3 秒后隐藏。窗口在视频尺寸可用时按完整视频的显示比例自适应，保留视频内的黑边，不自动裁切。Alt+Tab 返回应用后可直接使用空格、回车。截图保存清晰视频画面；优先使用系统图片目录的 `MyJellyfinClient` 文件夹，不可写时使用应用本地数据目录；开发版使用开发数据目录下的 `screenshots`，保存成功会显示实际路径。
 
-mpv 二进制（约 120MB，不提交 Git）需放置在 `src-tauri/resources/mpv/`。从 [mpv-winbuild-cmake](https://github.com/shinchiro/mpv-winbuild-cmake/releases) 下载 x86_64 构建，将 `mpv.exe`、`mpv.com` 和包内随附 DLL 放入该目录，保留仓库自带的 `portable_config/scripts/mjc-osc.lua`。
+mpv 二进制（约 120MB，不提交 Git）需放置在 `src-tauri/resources/mpv/`。从 [mpv-winbuild-cmake](https://github.com/shinchiro/mpv-winbuild-cmake/releases) 下载 x86_64 构建，将 `mpv.exe`、`mpv.com` 和包内随附 DLL 放入该目录，保留仓库自带的 `portable_config/scripts/mjc-osc.lua` 和 `portable_config/shaders/mjc-glass.glsl`。
 
 ## 开发
 

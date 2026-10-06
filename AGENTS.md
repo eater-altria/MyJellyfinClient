@@ -37,8 +37,9 @@
 | `src-tauri/src/lib.rs` | 窗口创建、Tauri 命令注册和窗口事件 |
 | `src-tauri/src/player.rs` | Win32 mpv 宿主窗口、进程、IPC、光标、窗口比例和 TLS |
 | `src-tauri/src/player_screenshot.rs` | 截图及 Windows 图片剪贴板 |
-| `src-tauri/src/player_framing.rs` | 保守黑边检测和真实渲染回归 |
+| `src-tauri/src/player_osc_render.rs` | 原生控件、毛玻璃、截图隔离和开播窗口比例的真实渲染回归 |
 | `src-tauri/resources/mpv/portable_config/scripts/mjc-osc.lua` | 原生播放控件的 ASS 绘制、菜单和输入 |
+| `src-tauri/resources/mpv/portable_config/shaders/mjc-glass.glsl` | 原生控件背后视频的局部 GPU 模糊、边缘折射和色散 |
 
 `src/api/jellyfin.ts` 是旧模块名的兼容导出，新代码优先使用 `mediaServer.ts`。
 
@@ -59,7 +60,7 @@ rustc -vV
 
 PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可能被按本地编码误读；当前 `.ps1` 使用 ASCII 文本。新增中文时应使用兼容编码并实际验证解析。对确认可信的下载脚本可使用 `Unblock-File` 清除来源标记，不应为此修改系统范围的执行策略。
 
-准备 `src-tauri/resources/mpv/mpv.exe`、`mpv.com` 及构建包随附 DLL，保留仓库自带的 `mjc-osc.lua`。这些二进制被 Git 忽略，克隆仓库后需自行准备；控制脚本是源码，必须提交。下载来源见 README。
+准备 `src-tauri/resources/mpv/mpv.exe`、`mpv.com` 及构建包随附 DLL，保留仓库自带的 `mjc-osc.lua` 和 `mjc-glass.glsl`。这些二进制被 Git 忽略，克隆仓库后需自行准备；控制脚本和 shader 是源码，必须提交。下载来源见 README。
 
 ## 数据与清理
 
@@ -68,8 +69,8 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
 - `.local` 包含开发账号、登录状态、设置和偏好，删除会重置开发版数据。它不是纯构建缓存。
 - `.local`、`.codex-remote-attachments`、环境文件、密钥、日志、构建产物及 mpv 二进制不应提交。不要把用户提供的服务器地址、密码、令牌或截图写入源码和测试。
 - `node_modules`、`dist`、`src-tauri/target`、`src-tauri/gen`、`*.tsbuildinfo` 可重新生成。清理前先区分持久数据、运行资源和可再生产物；递归操作应验证绝对路径范围。
-- 必要运行资源包括 mpv、其控制脚本和 `src-tauri/resources/WebView2Loader.dll`，不能按普通临时文件删除。
-- 安装包通过 `tauri.conf.json` 明确收录 mpv 的 EXE、COM、DLL 和 `mjc-osc.lua`，不收录开发运行产生的 `portable_config/cache`；不要为发布清空正在使用的开发数据。
+- 必要运行资源包括 mpv、其控制脚本和毛玻璃 shader，以及 `src-tauri/resources/WebView2Loader.dll`，不能按普通临时文件删除。
+- 安装包通过 `tauri.conf.json` 明确收录 mpv 的 EXE、COM、DLL、`mjc-osc.lua` 和 `mjc-glass.glsl`，不收录开发运行产生的 `portable_config/cache`；不要为发布清空正在使用的开发数据。
 
 ## 媒体库与协议约定
 
@@ -99,6 +100,7 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
 
 - mpv 通过 `--wid` 渲染到 Win32 子窗口。子窗口应为 React 标题栏预留 36 个逻辑像素，全屏时恢复完整视频区域。
 - 窗口比例计算应排除标题栏；最小化、最大化、全屏和还原不能互相破坏。窗口关闭时需清理 mpv。
+- 窗口自适应由原生端直接订阅 `video-params`，视频尺寸可用时立即调整，不等待 Lua 绘制或截图采样。比例遵循完整视频的显示尺寸和旋转信息；保留编码在视频内的黑边，不再自动检测或裁切。
 - 鼠标、键盘和光标命中区域来自原生控件；隐藏和模态遮挡的控件不能留下可点击提示。Alt+Tab 激活窗口后恢复可见原生宿主的键盘焦点，WebView 持有焦点时仍转发空格和回车。
 - Win32 回调不能直接做阻塞管道读写。命令写入和事件读取使用独立 IPC 连接；同步句柄克隆不能替代独立连接。
 - 创建、销毁和修改宿主窗口时注意所属 UI 线程。现有进程启动兼容逻辑也有实际用途，修改后验证真实 mpv 启动。
@@ -108,6 +110,7 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
 - 控件字号和点击尺寸跟随 Windows DPI，不随窗口高宽整体缩小。小窗口通过分行、折叠到「更多」和菜单滚动适配。
 - 窗口标题、原生画面标题及开播提示使用服务器元数据，不能回退到带鉴权参数的流 URL。双击画面按设置暂停/播放，控制面板和菜单的双击不触发背景播放动作。
 - 播放器控制使用白色图标、半透明底栏和不同透明度的白色进度条，文字标签只在悬浮时出现；菜单选中项使用白色勾选。暂停不锁定控件，保留切换媒体、全屏、进度和音轨等操作；已移除暂停锁定设置、解锁提示和 K 锁定快捷键，旧设置迁移时删除此字段。
+- 原生玻璃由 `gpu-next` 的 `mjc-glass.glsl` 在低分辨率纹理上模糊，并在可见面板边缘做实时透镜折射和 RGB 色散；Lua 同步范围、圆角、DPI、视频显示区域和 `GLASS_MATERIAL` 参数，图标与文字仍由 ASS 清晰绘制。无可见玻璃面板时跳过玻璃处理，不用 CPU 截图实现背景效果。PQ、HLG 和线性 HDR 输出跳过 SDR 饱和度及亮背景压暗处理。保存视频截图通过 Lua 的 `mjc-capture` 暂时隔离全部玻璃处理并恢复参数，保留 GPU 色彩和字幕处理。
 - 空格仅切换播放/暂停，不更新控制栏活动时间或重新显示控制 UI；首次激活应用后也应直接可用。
 - 自动隐藏默认 3 秒，旧设置通过一次性版本迁移采用 3 秒；之后用户重新选择的间隔保持持久化。菜单、媒体信息和进度拖动期间保持控件可见。
 - ASS 行级对齐标签不要重复或冲突：文字应使用对应 `an7/an8/an9`，矢量绘制明确使用 `an7`。视觉位置与点击区域要同步。
@@ -115,7 +118,7 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
 - 简繁字幕偏好不能只靠通用中文语言码；轨道记忆在同媒体源优先 ID，跨媒体源按语言、名称等元数据匹配。
 - 外挂字幕规则只过滤真正的外部字幕，不应误删服务器提取出的内嵌字幕。
 - mpv 的 HTTPS 使用只读导出的 Windows 信任根证书，保留 TLS 校验；不要用关闭校验来掩盖证书配置问题。
-- 「适应窗口」保持有效画面的比例；「裁切填充」应完整铺满，不能恢复旧的 `panscan=0.4`。黑边检测需保守，不能把黑场或标题卡裁掉。
+- 「适应窗口」保持完整视频帧的比例，宽屏显示含内嵌上下黑边的 16:9 视频时，左右留黑可能是正常比例结果；「裁切填充」由用户主动选择并完整铺满，不能恢复旧的 `panscan=0.4`。
 
 ## 验证命令
 
@@ -134,7 +137,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 & ./src-tauri/resources/mpv/mpv.com --no-config --vo=null --idle=yes --script=scripts/test-player-osc.lua
 ```
 
-`test:home` 覆盖全部分类、8 个合集、成员浏览、多页加载、重试和取消；`test:servers` 使用本地 HTTP fixture；`test:playback` 覆盖关闭、元数据标题及慢网络生命周期；`test:settings` 覆盖真实组件、偏好和 3 秒迁移。Rust/Lua 测试覆盖原生输入、启动重试、TLS、截图目录回退、真实 GPU/ASS 渲染及响应式控件，需本地 mpv 和 Windows 环境。原生控件渲染回归使用 `scripts/test-player-osc-render.lua` 的合成媒体状态，不读取账号或服务器截图。
+`test:home` 覆盖全部分类、8 个合集、成员浏览、多页加载、重试和取消；`test:servers` 使用本地 HTTP fixture；`test:playback` 覆盖关闭、元数据标题及慢网络生命周期；`test:settings` 覆盖真实组件、偏好和 3 秒迁移。Rust/Lua 测试覆盖原生输入、启动重试、TLS、截图目录回退、真实 GPU/ASS 渲染、毛玻璃像素效果和截图隔离、开播窗口比例及响应式控件，需本地 mpv 和 Windows 环境。Rust 回归同时运行 Lua 控件交互测试；原生控件渲染使用 `scripts/test-player-osc-render.lua` 的合成媒体状态，不读取账号或服务器截图。
 
 若受限执行环境无法读取构建工具目录或系统临时目录，应区分权限问题和代码问题。必要时为本次验证指定可写的临时目录，不能据此改坏用户正常构建配置；不要在敏感输出中打印令牌。
 
@@ -146,7 +149,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 - 打包使用 `./scripts/build-tauri.ps1`；默认 x64 MSVC 的 NSIS 输出在 `src-tauri/target/release/bundle/nsis/`。
 - `scripts/sign.ps1` 可使用已有本机开发证书，但这不等于所有用户机器都信任它。`make-dev-cert.ps1` 会修改证书库，不应作为普通构建步骤自动运行。
 - `build-tauri.ps1` 先签名 mpv 运行资源；Tauri 的 `bundle.windows.signCommand` 调用 `sign.ps1 -Paths`，在二进制补丁之后、压入安装包之前签名程序，并签名卸载程序与最终安装包。不要恢复只在打包完成后签名源码目录程序的流程；保留已有有效签名，未找到开发证书时跳过，签名失败时终止构建。
-- 发布前核对源码提交、版本、程序架构、包内 mpv/控制脚本和附件 SHA-256。版本定义位于 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`，Cargo 锁文件中的本项目版本也需一致。
+- 发布前核对源码提交、版本、程序架构、包内 mpv/控制脚本/shader 和附件 SHA-256。版本定义位于 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`，Cargo 锁文件中的本项目版本也需一致。
 - Release 是构建快照；推送源码不会自动更新已发布安装包。不要擅自覆盖已有标签或资产；发布完成后验证公开状态、附件上传状态、大小和校验值。
 
 ## 维护这份指南

@@ -2,6 +2,7 @@
 -- Used by the native render regression; all media and tracks are synthetic.
 local native_property, string_property = mp.get_property_native, mp.get_property
 local register_message = mp.register_script_message
+local native_command = mp.commandv
 local observers, messages = {}, {}
 local mouse = {x = 0, y = 0}
 local tracks = {
@@ -24,11 +25,16 @@ end
 mp.observe_property = function(name, _, callback) observers[name] = callback end
 mp.register_script_message = function(name, callback) messages[name] = callback end
 mp.add_periodic_timer = function() end
-mp.commandv = function() end
+mp.commandv = function(command, ...)
+    if command == 'screenshot-to-file' or (command == 'script-message' and select(1, ...) == 'mjc-capture-result') then
+        return native_command(command, ...)
+    end
+end
 mp.add_forced_key_binding = function() end
 mp.register_event = function() end
 
 dofile('src-tauri/resources/mpv/portable_config/scripts/mjc-osc.lua')
+register_message('mjc-capture', messages['mjc-capture'])
 
 register_message('mjc-render-fixture', function(scale, mode)
     messages['mjc-settings']('{"showSkipButtons":true,"showSwitchMediaButton":true,"showScreenshotButton":true,"autoLockOnPause":false,"matchWindowToVideoRatio":false}')
@@ -38,7 +44,7 @@ register_message('mjc-render-fixture', function(scale, mode)
     observers['time-pos']('time-pos', 864)
     observers.pause('pause', mode == 'paused')
     observers['mouse-pos']('mouse-pos', mouse)
-    if mode == 'sub' then messages['mjc-key-down']('S') end
+    if mode == 'sub' or mode == 'letterbox' then messages['mjc-key-down']('S') end
     if mode == 'hover' then
         local dimensions = native_property('osd-dimensions')
         mouse = {x = dimensions.w * 0.45, y = dimensions.h - 99}

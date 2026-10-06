@@ -23,6 +23,7 @@
       "resources/mpv/*.com": "mpv",
       "resources/mpv/*.dll": "mpv",
       "resources/mpv/portable_config/scripts/mjc-osc.lua": "mpv/portable_config/scripts/mjc-osc.lua",
+      "resources/mpv/portable_config/shaders/mjc-glass.glsl": "mpv/portable_config/shaders/mjc-glass.glsl",
       "resources/WebView2Loader.dll": ""
     },
     "windows": {

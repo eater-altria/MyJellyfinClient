@@ -195,7 +195,17 @@ body {
 .player-compact-actions {
   display: none;
 }
-@container (max-width: 639px) {
+.player-volume-slider {
+  width: 64px;
+  margin: 0 8px 0 4px;
+  flex-shrink: 0;
+}
+.player-volume-slider:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.85);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+@container (max-width: 735px) {
   .player-glass-panel {
     grid-template-columns: 1fr auto;
     row-gap: 2px;
@@ -216,6 +226,9 @@ body {
   }
 }
 @container (max-width: 439px) {
+  .player-volume-slider {
+    width: 48px;
+  }
   .player-secondary-button,
   .player-track-action {
     display: none;

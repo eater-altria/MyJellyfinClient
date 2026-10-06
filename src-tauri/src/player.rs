@@ -17,8 +17,6 @@ use tauri::{AppHandle, Emitter, Manager};
 
 #[path = "player_screenshot.rs"]
 mod screenshot;
-#[path = "player_framing.rs"]
-mod framing;
 
 #[cfg(test)]
 #[path = "player_osc_render.rs"]
@@ -353,6 +351,7 @@ struct MpvHostData {
     last_move: Instant,
     high_surrogate: Option<u16>,
     mouse_captured: bool,
+    captured_cursor: CursorKind,
     cursor_zones: Arc<Mutex<Vec<CursorZone>>>,
     fullscreen: Arc<AtomicBool>,
 }
@@ -389,7 +388,7 @@ unsafe fn refresh_host_cursor(host: isize) {
     if GetCursorPos(&mut point) == 0 { return; }
     if !(*data).mouse_captured && WindowFromPoint(point) != hwnd { return; }
     ScreenToClient(hwnd, &mut point);
-    set_player_cursor((*data).cursor_at(point.x, point.y));
+    set_player_cursor(if (*data).mouse_captured { (*data).captured_cursor } else { (*data).cursor_at(point.x, point.y) });
 }
 
 fn ipc(pipe: &Sender<serde_json::Value>, value: serde_json::Value) {
@@ -441,6 +440,10 @@ fn mouse_xy(lparam: LPARAM) -> (i32, i32) {
         (lparam & 0xFFFF) as i16 as i32,
         ((lparam >> 16) & 0xFFFF) as i16 as i32,
     )
+}
+
+fn pointer_message(event: &str, x: i32, y: i32) -> serde_json::Value {
+    json!({"command": ["script-message", "mjc-pointer", event, x.to_string(), y.to_string()]})
 }
 
 unsafe extern "system" fn host_wndproc(
@@ -496,27 +499,33 @@ unsafe extern "system" fn host_wndproc(
     match msg {
         WM_MOUSEMOVE => {
             let (x, y) = mouse_xy(lparam);
-            set_player_cursor(d.cursor_at(x, y));
+            set_player_cursor(if d.mouse_captured { d.captured_cursor } else { d.cursor_at(x, y) });
             if d.last_move.elapsed() >= Duration::from_millis(33) {
                 d.last_move = Instant::now();
                 let (x, y) = mouse_xy(lparam);
                 ipc(&d.pipe, json!({"command": ["mouse", x, y]}));
+                if d.mouse_captured {
+                    // Pass captured client coordinates directly. mpv's mouse
+                    // key sections may cancel their binding outside its area.
+                    ipc(&d.pipe, pointer_message("move", x, y));
+                }
             }
             0
         }
         WM_LBUTTONDOWN => {
             SetFocus(hwnd);
             d.mouse_captured = true;
-            SetCapture(hwnd);
             let (x, y) = mouse_xy(lparam);
+            d.captured_cursor = d.cursor_at(x, y);
+            SetCapture(hwnd);
             ipc(&d.pipe, json!({"command": ["mouse", x, y]}));
-            ipc(&d.pipe, json!({"command": ["keydown", "MBTN_LEFT"]}));
+            ipc(&d.pipe, pointer_message("down", x, y));
             0
         }
         WM_LBUTTONUP => {
             let (x, y) = mouse_xy(lparam);
             ipc(&d.pipe, json!({"command": ["mouse", x, y]}));
-            ipc(&d.pipe, json!({"command": ["keyup", "MBTN_LEFT"]}));
+            ipc(&d.pipe, pointer_message("up", x, y));
             d.mouse_captured = false;
             ReleaseCapture();
             set_player_cursor(d.cursor_at(x, y));
@@ -993,6 +1002,7 @@ pub fn start_playback(
         // script so stale portable configs cannot draw a second controller.
         "--load-scripts=no".into(),
         format!("--script={}", mpv.parent().unwrap().join("portable_config/scripts/mjc-osc.lua").display()),
+        format!("--glsl-shaders-append={}", mpv.parent().unwrap().join("portable_config/shaders/mjc-glass.glsl").display()),
         "--osc=no".into(),
         "--osd-level=1".into(),
         "--osd-duration=2000".into(),
@@ -1055,7 +1065,6 @@ pub fn start_playback(
     let pipe = command_sender(command_file);
 
     let cursor_zones = Arc::new(Mutex::new(Vec::new()));
-    let framing_busy = Arc::new(AtomicBool::new(false));
     // Attach input-forwarding data to the host window
     {
         let host_data = Box::new(MpvHostData {
@@ -1063,6 +1072,7 @@ pub fn start_playback(
             last_move: Instant::now() - Duration::from_secs(1),
             high_surrogate: None,
             mouse_captured: false,
+            captured_cursor: CursorKind::Default,
             cursor_zones: cursor_zones.clone(),
             fullscreen: state.fullscreen.clone(),
         });
@@ -1087,6 +1097,9 @@ pub fn start_playback(
     write_json(&mut pipe_file, &json!({"command": ["observe_property", 1, "time-pos"]})).map_err(|e| e.to_string())?;
     write_json(&mut pipe_file, &json!({"command": ["observe_property", 2, "duration"]})).map_err(|e| e.to_string())?;
     write_json(&mut pipe_file, &json!({"command": ["observe_property", 3, "pause"]})).map_err(|e| e.to_string())?;
+    // Decoder geometry is available before the rendered frame/OSC. Do not wait
+    // for Lua or sample image contents to choose the playback window's ratio.
+    write_json(&mut pipe_file, &json!({"command": ["observe_property", 4, "video-params"]})).map_err(|e| e.to_string())?;
     // Initial queries
     write_json(&mut pipe_file, &json!({"command": ["get_property", "duration"], "request_id": 100})).map_err(|e| e.to_string())?;
 
@@ -1121,7 +1134,6 @@ pub fn start_playback(
                 }
                 match v.get("event").and_then(|e| e.as_str()) {
                     Some("file-loaded") => {
-                        framing::request(&app2, pid, &screenshot_pipe, &command_pipe, &framing_busy);
                         let app3 = app2.clone();
                         let ready_settings = settings.clone();
                         let _ = app2.run_on_main_thread(move || {
@@ -1135,6 +1147,7 @@ pub fn start_playback(
                                 }
                             }
                             unsafe {
+                                on_main_window_resized(&state, GetParent(host as HWND));
                                 ShowWindow(host as HWND, SW_SHOW);
                                 prepare_mpv_window(host);
                             }
@@ -1148,6 +1161,12 @@ pub fn start_playback(
                     Some("property-change") => {
                         let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
                         let data = v.get("data").cloned().unwrap_or(serde_json::Value::Null);
+                        if name == "video-params" {
+                            if let Some(ratio) = decoded_video_ratio(&data, &settings) {
+                                update_video_ratio(&app2, pid, ratio);
+                            }
+                            continue;
+                        }
                         if let Ok(mut st) = status.lock() {
                             match name {
                                 "time-pos" => st.position = data.as_f64().unwrap_or(st.position),
@@ -1176,20 +1195,6 @@ pub fn start_playback(
                                         let _ = w.set_fullscreen(!fs);
                                     }
                                 }
-                                "mjc-video-ratio" if setting_bool(&settings, "matchWindowToVideoRatio", true) => {
-                                    if let Some(ratio) = v["args"][1].as_str().and_then(|s| s.parse::<f64>().ok()).filter(|r| r.is_finite() && *r > 0.1 && *r < 10.0) {
-                                        *app2.state::<PlayerState>().video_ratio.lock().unwrap() = Some(ratio);
-                                        let app3 = app2.clone();
-                                        let _ = app2.run_on_main_thread(move || {
-                                            if !app3.state::<PlayerState>().session.lock().unwrap().as_ref().is_some_and(|s| s.pid == pid) { return; }
-                                            if let Some(window) = app3.get_webview_window("main") {
-                                                if let Ok(hwnd) = window.hwnd() {
-                                                    on_main_window_resized(&app3.state::<PlayerState>(), hwnd.0 as HWND);
-                                                }
-                                            }
-                                        });
-                                    }
-                                }
                                 "mjc-switch-media" => {
                                     if let Some(direction @ ("prev" | "next")) = v["args"][1].as_str() {
                                         let _ = app2.emit("mpv://switch-media", direction);
@@ -1206,7 +1211,6 @@ pub fn start_playback(
                                     }
                                 }
                                 "mjc-screenshot" => screenshot::request(&app2, pid, &screenshot_pipe, &command_pipe, &settings),
-                                "mjc-detect-frame" => framing::request(&app2, pid, &screenshot_pipe, &command_pipe, &framing_busy),
                                 "mjc-cursor-zones" => {
                                     if let Some(zones) = v["args"][1].as_str().and_then(|s| serde_json::from_str::<Vec<CursorZone>>(s).ok()) {
                                         *cursor_zones.lock().unwrap() = zones;
@@ -1286,6 +1290,34 @@ pub fn start_playback(
     pipe_write(&pipe, json!({"command": ["loadfile", opts.url]}));
 
     Ok(())
+}
+
+fn decoded_video_ratio(params: &serde_json::Value, settings: &serde_json::Value) -> Option<f64> {
+    if !setting_bool(settings, "matchWindowToVideoRatio", true) { return None; }
+    let valid = |n: f64| n.is_finite() && n > 0.0;
+    let mut ratio = params["aspect"].as_f64().filter(|n| valid(*n)).or_else(|| {
+        let w = params["dw"].as_f64().filter(|n| valid(*n))?;
+        let h = params["dh"].as_f64().filter(|n| valid(*n))?;
+        Some(w / h)
+    })?;
+    if params["rotate"].as_i64().unwrap_or(0).rem_euclid(180) == 90 { ratio = 1.0 / ratio; }
+    (ratio.is_finite() && ratio > 0.1 && ratio < 10.0).then_some(ratio)
+}
+
+fn update_video_ratio(app: &AppHandle, pid: u32, ratio: f64) {
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let state = app2.state::<PlayerState>();
+        if !state.session.lock().unwrap().as_ref().is_some_and(|s| s.pid == pid) { return; }
+        {
+            let mut previous = state.video_ratio.lock().unwrap();
+            if previous.is_some_and(|old| (old - ratio).abs() < 0.00001) { return; }
+            *previous = Some(ratio);
+        }
+        if let Some(window) = app2.get_webview_window("main") {
+            if let Ok(hwnd) = window.hwnd() { on_main_window_resized(&state, hwnd.0 as HWND); }
+        }
+    });
 }
 
 /// Called from the window resize handler in lib.rs
@@ -1441,6 +1473,19 @@ mod tests {
         assert_eq!(resize_hit(1278, 798, 1280, 800, 5), HTBOTTOMRIGHT);
         assert_eq!(resize_hit(640, 2, 1280, 800, 5), HTTOP);
         assert_eq!(resize_hit(640, 400, 1280, 800, 5), HTCLIENT);
+    }
+
+    #[test]
+    fn window_ratio_uses_decoded_display_size_and_rotation_without_cropping() {
+        let settings = json!({});
+        assert_eq!(decoded_video_ratio(&json!({"aspect": 16.0 / 9.0, "crop-w": 1920, "crop-h": 816}), &settings), Some(16.0 / 9.0));
+        assert_eq!(decoded_video_ratio(&json!({"aspect": 4.0 / 3.0, "w": 720, "h": 576}), &settings), Some(4.0 / 3.0));
+        assert_eq!(decoded_video_ratio(&json!({"dw": 1920, "dh": 1080, "rotate": 90}), &settings), Some(9.0 / 16.0));
+        assert_eq!(decoded_video_ratio(&json!({"dw": 1920, "dh": 1080, "rotate": 270}), &settings), Some(9.0 / 16.0));
+        assert_eq!(decoded_video_ratio(&json!({"aspect": 16.0 / 9.0}), &json!({"matchWindowToVideoRatio": false})), None);
+        for params in [json!(null), json!({"aspect": 0}), json!({"dw": 1920, "dh": 0}), json!({"aspect": 99})] {
+            assert_eq!(decoded_video_ratio(&params, &settings), None);
+        }
     }
 
     #[test]
