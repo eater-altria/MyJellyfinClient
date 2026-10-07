@@ -8,6 +8,8 @@ import { getAdjacentMedia, getPlaybackPreferences, rememberTrack, saveSubtitleSe
 import type { BaseItem } from '../api/mediaServer';
 import { PLAYER_EXIT_EVENT } from '../player/exitPlayback';
 import { mediaTitle, usePlaybackTitle } from '../player/playbackTitle';
+import LiquidGlass from '../components/LiquidGlass';
+import '../player/liquid-glass.css';
 
 interface PositionPayload {
   position: number;
@@ -304,17 +306,17 @@ export default function NativePlayer() {
   }, [serverId, itemId]);
 
   return (
-    <div className="player-surface relative flex h-full w-full flex-col items-center justify-center bg-black text-white/50">
+    <div className="player-surface player-native-stage relative flex h-full w-full flex-col items-center justify-center bg-black px-6 text-white/50">
       {error ? (
-        <div className="flex flex-col items-center gap-4">
-          <div className="text-[16px] font-medium text-white">播放失败</div>
-          <div className="max-w-md px-6 text-center text-[13px] text-white/60">{error}</div>
-        </div>
+        <LiquidGlass tone="dark" className="player-status-card player-error-card" role="alert">
+          <div className="text-[18px] font-medium text-white">播放失败</div>
+          <div className="max-w-md text-center text-[13px] leading-relaxed text-white/70">{error}</div>
+        </LiquidGlass>
       ) : starting ? (
-        <>
-          <div className="h-10 w-10 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
-          <div className="mt-4 text-[13px]">正在加载视频…</div>
-        </>
+        <LiquidGlass tone="dark" className="player-status-card">
+          <div className="h-9 w-9 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
+          <div className="text-[13px] text-white/80" role="status">正在加载视频…</div>
+        </LiquidGlass>
       ) : (
         <div className="text-[12px] text-white/30">
           ESC 退出 · ←/→ 快退/快进 · ↑/↓/滚轮 音量 · A 音轨 · S 字幕 · M 静音 · 空格 暂停/继续 · 回车 全屏

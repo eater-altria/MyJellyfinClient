@@ -39,6 +39,8 @@ const api={
   logoUrl:()=>null,
 };
 const settings={showPreviewImage:true,showItemCountInTitle:true,sortFoldersSeparately:false};
+const backdrop=load('src/store/appBackdrop.ts');
+const backdropState=()=>backdrop.useAppBackdrop.getState();
 const servers=Object.assign(selector=>selector({servers:[{id:'server',name:'Fixture',address:'https://fixture'}]}),{getState:()=>({getApi:()=>api})});
 const presentation=load('src/utils/listPresentation.ts',{'../api/mediaServer':media});
 function renderHarness(file,params) {
@@ -56,8 +58,10 @@ function renderHarness(file,params) {
     'react-router-dom':{useParams:()=>params,useNavigate:()=>path=>navigation.push(path)},
     '../api/mediaServer':media,'../utils/listPresentation':presentation,
     '../store/servers':{useServers:servers},'../store/settings':{useSettings:selector=>selector?selector(settings):settings},
+    '../store/appBackdrop':backdrop,
     '../components/SectionRow':{__esModule:true,default:'Section'},'../components/PosterCard':{__esModule:true,default:'Poster'},
     '../components/HeroCarousel':{__esModule:true,default:'Hero'},
+    '../components/LiquidGlass':{__esModule:true,default:'Glass'},
     '../components/Feedback':{EmptyState:'Empty',ErrorState:'Error',Spinner:'Spinner'},
     '../components/icons':{IconServer:'Icon',IconChevronLeft:'Icon'},
   }).default;
@@ -76,6 +80,23 @@ const buttons=tree=>find(tree,n=>n.type==='button');
   home.render();await flush();let tree=home.render();
   assert.equal(find(tree,n=>n.type==='Section'&&n.props.title.startsWith('最新')).length,6,'every view must have a latest row, including the fourth and later views');
   assert.equal(posters(section(tree,'最新Shows')).length,24,'fourth view must load');
+  const firstHero=find(tree,n=>n.type==='Hero')[0];
+  assert(firstHero?.props.onCurrentItemChange,'The visible carousel must publish its current artwork to the glass backdrop');
+  firstHero.props.onCurrentItemChange(firstHero.props.items[0]);
+  assert.equal(backdropState().source?.route,'/server/server','Ambient artwork must remain scoped to the active home route');
+  assert.equal(backdropState().source?.url,api.backdropUrl(firstHero.props.items[0],1920),'The shell must reuse the current carousel image');
+  firstHero.props.onCurrentItemChange(firstHero.props.items.at(-1));
+  assert.equal(backdropState().source?.url,api.backdropUrl(firstHero.props.items.at(-1),1920),'Changing the current carousel item must change the glass scenery');
+  settings.showPreviewImage=false;tree=home.render();
+  assert.equal(find(tree,n=>n.type==='Hero').length,0,'Disabling previews must remove the carousel');
+  assert.equal(backdropState().source,null,'Disabling previews must also remove ambient artwork');
+  settings.showPreviewImage=true;tree=home.render();
+  const restoredHero=find(tree,n=>n.type==='Hero')[0];
+  restoredHero.props.onCurrentItemChange(restoredHero.props.items[0]);
+  assert(backdropState().source,'Re-enabling previews must allow current artwork to return');
+  restoredHero.props.onCurrentItemChange(null);
+  assert.equal(backdropState().source,null,'A carousel with no current image must retain the gradient fallback');
+  restoredHero.props.onCurrentItemChange(restoredHero.props.items[0]);
   const sets=section(tree,'最新Collections');assert.equal(posters(sets).length,8,'all eight collection containers must appear');
   posters(sets)[0].props.onClick();assert.equal(navigation.at(-1),'/server/server/library/set-0','collections must navigate to their members');
   assert(find(section(tree,'最新Empty'),n=>n.props?.children==='此分类暂无内容').length);
@@ -90,6 +111,9 @@ const buttons=tree=>find(tree,n=>n.type==='button');
   section(tree,'继续观看').props.onLoadMore();section(tree,'接下来').props.onLoadMore();await flush();tree=home.render();
   assert.equal(posters(section(tree,'继续观看')).length,30);assert.equal(posters(section(tree,'接下来')).length,30);
   home.unmount();
+  assert.equal(backdropState().source,null,'Leaving home must release its ambient artwork');
+  restoredHero.props.onCurrentItemChange(restoredHero.props.items[0]);
+  assert.equal(backdropState().source,null,'A callback from an unmounted home must not restore its artwork');
   assert(calls.every(c=>c.ParentId.startsWith('@')||c.SortBy==='DateCreated,SortName'));
   console.log('PASS: all categories, eight collection containers, unlimited pagination, resume/next-up pagination, retries and correct navigation');
 
@@ -115,18 +139,34 @@ const buttons=tree=>find(tree,n=>n.type==='button');
   assert(!posters(section(cancelled.render(),'最新Movies')).some(p=>p.props.item.Id.startsWith('late')),'unmounted home must ignore late responses');
   console.log('PASS: pending pages are cancelled and late responses are ignored');
 
-  const heroStates=[0,false];let heroCursor=0;
+  const heroStates=[0,false],heroEffects=[],heroNotifications=[];let heroCursor=0;
   const Hero=load('src/components/HeroCarousel.tsx',{
-    react:{useState:initial=>{const i=heroCursor++;return [heroStates[i]??initial,next=>{heroStates[i]=typeof next==='function'?next(heroStates[i]):next;}];},useCallback:fn=>fn,useEffect(){}},
+    react:{useState:initial=>{const i=heroCursor++;return [heroStates[i]??initial,next=>{heroStates[i]=typeof next==='function'?next(heroStates[i]):next;}];},useCallback:fn=>fn,useEffect:effect=>heroEffects.push(effect)},
     'react/jsx-runtime':{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})},
     'react-router-dom':{useNavigate:()=>()=>{}},'./icons':{IconChevronLeft:'Icon',IconChevronRight:'Icon'},
+    './LiquidGlass':{__esModule:true,default:'Glass'},
   }).default;
-  const renderHero=()=>{heroCursor=0;return Hero({api,items:items('carousel',61),serverId:'server'});};
+  const carouselItems=items('carousel',61);
+  const publishCurrent=item=>heroNotifications.push(item);
+  const renderHero=(list=carouselItems)=>{
+    heroCursor=0;
+    const tree=Hero({api,items:list,serverId:'server',onCurrentItemChange:publishCurrent});
+    // Exercise actual effects while immediately disposing the fixture's autoplay interval.
+    for(const effect of heroEffects.splice(0))effect()?.();
+    return tree;
+  };
   let hero=renderHero();
+  assert.equal(heroNotifications.at(-1),carouselItems[0],'The first visible carousel item must publish itself');
   assert.equal(find(hero,n=>n.type==='img').length,3,'the unlimited carousel must not download every backdrop at once');
-  assert.equal(buttons(hero).length,9,'use two arrows and a bounded indicator strip rather than dozens of dots');
-  for(let i=0;i<60;i++)buttons(hero)[1].props.onClick({stopPropagation(){}});
+  const heroButton=label=>buttons(hero).find(button=>button.props['aria-label']===label);
+  assert(heroButton('上一张预览')&&heroButton('下一张预览'),'both carousel directions remain accessible');
+  assert.equal(buttons(hero).filter(button=>button.props['aria-label']?.startsWith('查看第 ')).length,7,'keep a bounded indicator strip rather than dozens of dots');
+  for(let i=0;i<60;i++)heroButton('下一张预览').props.onClick({stopPropagation(){}});
   hero=renderHero();
   assert(find(hero,n=>n.type==='img'&&n.props.alt==='carousel 60'&&n.props.className.includes('opacity-100')).length,'all carousel items remain navigable');
+  assert.equal(heroNotifications.at(-1),carouselItems[60],'Backdrop publication must follow navigation to the last loaded item');
+  renderHero([]);
+  assert.equal(heroNotifications.at(-1),null,'An emptied carousel must publish the gradient fallback');
   console.log('PASS: unlimited carousel navigation with lazy backdrop rendering');
+  console.log('PASS: current carousel artwork, preview settings, empty-image fallback and home backdrop cleanup');
 })().catch(error=>{console.error(error);process.exitCode=1;});

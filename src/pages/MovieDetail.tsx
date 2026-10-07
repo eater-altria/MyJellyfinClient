@@ -14,6 +14,7 @@ import SectionRow from '../components/SectionRow';
 import PosterCard from '../components/PosterCard';
 import CastRow from '../components/CastRow';
 import MediaInfo from '../components/MediaInfo';
+import LiquidGlass from '../components/LiquidGlass';
 import { Spinner, EmptyState, ErrorState } from '../components/Feedback';
 import { IconChevronLeft, IconHome, IconPlay, IconHeart, IconCheck } from '../components/icons';
 
@@ -61,7 +62,7 @@ export default function MovieDetailPage() {
     return (
       <div className="h-full bg-page-bg">
         <EmptyState title="服务器不可用" hint="请返回服务器列表重新选择服务器。">
-          <Link to="/servers" className="rounded-lg bg-accent px-4 py-1.5 text-[13px] text-white hover:opacity-90">
+          <Link to="/servers" className="glass-button-primary px-5 py-2.5 text-[13px]">
             返回服务器列表
           </Link>
         </EmptyState>
@@ -70,23 +71,25 @@ export default function MovieDetailPage() {
   }
 
   const header = (
-    <div className="flex h-12 items-center px-4">
-      <div className="flex items-center gap-2">
+    <div className="flex h-20 items-center px-5 lg:px-8">
+      <LiquidGlass intensity="subtle" className="flex items-center gap-1 rounded-full p-1.5">
         <button
           onClick={() => navigate(-1)}
-          className="flex h-8 w-8 items-center justify-center rounded-full bg-white/60 text-gray-700 shadow-card backdrop-blur hover:bg-white"
+          className="glass-icon-button h-9 w-9 text-text-primary"
           title="返回"
+          aria-label="返回"
         >
           <IconChevronLeft size={16} />
         </button>
         <button
           onClick={() => navigate(`/server/${serverId}`)}
-          className="flex h-8 w-8 items-center justify-center rounded-full bg-white/60 text-gray-700 shadow-card backdrop-blur hover:bg-white"
+          className="glass-icon-button h-9 w-9 text-text-primary"
           title="首页"
+          aria-label="首页"
         >
           <IconHome size={15} />
         </button>
-      </div>
+      </LiquidGlass>
       <div className="flex-1" />
     </div>
   );
@@ -159,11 +162,12 @@ export default function MovieDetailPage() {
       ) : error ? (
         <ErrorState message={error} onRetry={() => setTick((t) => t + 1)} />
       ) : item ? (
-        <div className="pt-6">
+        <div className="pt-2">
+          <LiquidGlass intensity="subtle" className="max-w-4xl rounded-[28px] p-6 sm:p-7">
           {logo ? (
-            <img src={logo} alt={item.Name} className="max-h-28 max-w-md object-contain" draggable={false} />
+            <img src={logo} alt={item.Name} className="max-h-28 max-w-full object-contain sm:max-w-md" draggable={false} />
           ) : (
-            <h1 className="text-4xl font-bold text-text-primary">{item.Name}</h1>
+            <h1 className="break-words text-3xl font-semibold tracking-tight text-text-primary sm:text-4xl">{item.Name}</h1>
           )}
 
           {isEpisode && <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px] text-gray-500">
@@ -173,12 +177,14 @@ export default function MovieDetailPage() {
           </div>}
 
           {/* Action row */}
-          <div className="mt-4 flex items-center gap-3">
+          <div className="mt-5 flex flex-wrap items-center gap-2.5">
             <button
               onClick={togglePlayed}
               title={played ? '标记未看' : '标记已看'}
-              className={`flex h-11 w-11 items-center justify-center rounded-full shadow-card transition ${
-                played ? 'bg-accent text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+              aria-label={played ? '标记未看' : '标记已看'}
+              aria-pressed={played}
+              className={`glass-icon-button h-11 w-11 ${
+                played ? 'bg-accent text-white' : 'text-text-secondary'
               }`}
             >
               <IconCheck size={18} />
@@ -186,15 +192,17 @@ export default function MovieDetailPage() {
             <button
               onClick={toggleFavorite}
               title={fav ? '取消收藏' : '收藏'}
-              className={`flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-card transition hover:bg-gray-50 ${
-                fav ? 'text-red-500' : 'text-gray-600'
+              aria-label={fav ? '取消收藏' : '收藏'}
+              aria-pressed={fav}
+              className={`glass-icon-button h-11 w-11 ${
+                fav ? 'text-red-500' : 'text-text-secondary'
               }`}
             >
               <IconHeart size={18} filled={fav} />
             </button>
             <button
               onClick={play}
-              className="flex h-11 items-center gap-2 rounded-full bg-accent px-8 text-[14px] font-medium text-white shadow-card transition hover:opacity-90"
+              className="glass-button-primary flex min-h-11 items-center gap-2 px-7 text-[14px] font-medium"
             >
               <IconPlay size={16} />
               播放
@@ -203,37 +211,39 @@ export default function MovieDetailPage() {
           </div>
 
           {/* Meta line 1 */}
-          <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-gray-500">
+          <div className="mt-5 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-[12px] text-text-secondary">
             {item.CommunityRating != null && item.CommunityRating > 0 && (
               <span className="font-medium text-amber-500">★{item.CommunityRating.toFixed(1)}</span>
             )}
             {item.CriticRating != null && <span>🍅{Math.round(item.CriticRating)}%</span>}
             {item.OfficialRating && (
-              <span className="rounded border border-gray-300 px-1 py-px text-[10px] leading-tight">
+              <span className="glass-badge text-[10px] leading-tight">
                 {item.OfficialRating}
               </span>
             )}
             {item.Genres && item.Genres.length > 0 && <span>{item.Genres.join(' · ')}</span>}
           </div>
-          {metaLine2 && <div className="mt-1 text-[12px] text-gray-500">{metaLine2}</div>}
+          {metaLine2 && <div className="mt-2 text-[12px] text-text-secondary">{metaLine2}</div>}
 
           {/* Overview */}
           {item.Overview && (
-            <p className="mt-3 line-clamp-4 max-w-4xl text-[13px] leading-relaxed text-gray-600">
+            <p className="mt-4 line-clamp-4 max-w-4xl text-[13px] leading-7 text-text-primary/80">
               {item.Overview}
             </p>
           )}
 
+          </LiquidGlass>
+
           {/* Cast */}
           {item.People && item.People.length > 0 && (
-            <SectionRow title="演职人员" count={item.People.length} onMore={() => navigate(`/server/${serverId}/item/${item.Id}/cast`)}>
+            <SectionRow title="演职人员" count={item.People.length} glass onMore={() => navigate(`/server/${serverId}/item/${item.Id}/cast`)}>
               <CastRow api={api} people={item.People} onPersonClick={(person) => navigate(`/server/${serverId}/person/${person.Id}`)} />
             </SectionRow>
           )}
 
           {/* Similar */}
           {similarItems.length > 0 && (
-            <SectionRow title="类似作品" count={similarItems.length} onMore={() => navigate(`/server/${serverId}/item/${item.Id}/similar`)}>
+            <SectionRow title="类似作品" count={similarItems.length} glass onMore={() => navigate(`/server/${serverId}/item/${item.Id}/similar`)}>
               {similarItems.map((s) => (
                 <PosterCard
                   key={s.Id}

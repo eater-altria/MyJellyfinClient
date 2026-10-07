@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useSettings, AccentColor, AppSettings } from '../store/settings';
 import Toggle from '../components/Toggle';
+import LiquidGlass from '../components/LiquidGlass';
 import { isTauri } from '../platform/window';
 import {
   IconSettings,
@@ -28,15 +29,15 @@ function Section({
   footnote?: string;
 }) {
   return (
-    <div className="mb-6">
-      <div className="mb-1.5 px-1 text-[12px] text-gray-400">{label}</div>
-      <div className="rounded-2xl bg-white shadow-card divide-y divide-black/5">
+    <section className="mb-7">
+      <h3 className="mb-2.5 px-5 text-[12px] font-medium text-text-secondary">{label}</h3>
+      <div className="glass-surface divide-y divide-black/[0.045] overflow-hidden">
         {children}
       </div>
       {footnote && (
-        <div className="mt-1.5 px-1 text-[11px] text-gray-400">{footnote}</div>
+        <p className="mt-2.5 px-5 text-[12px] leading-relaxed text-text-secondary">{footnote}</p>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -48,9 +49,9 @@ function Row({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 px-4 py-3">
-      <div className="text-[13px]">{label}</div>
-      <div className="flex flex-shrink-0 items-center gap-2">{children}</div>
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-4">
+      <div className="min-w-0 text-[13px] text-text-primary">{label}</div>
+      <div className="flex max-w-full flex-shrink-0 items-center gap-2">{children}</div>
     </div>
   );
 }
@@ -72,13 +73,13 @@ function ToggleRow<K extends keyof AppSettings>({
   const set = useSettings((s) => s.set);
   return (
     <Row label={label}>
-      <Toggle disabled={disabled} on={value} onChange={(v) => set(field, v as AppSettings[typeof field])} />
+      <Toggle label={label} disabled={disabled} on={value} onChange={(v) => set(field, v as AppSettings[typeof field])} />
     </Row>
   );
 }
 
 const selectCls =
-  'rounded-lg bg-gray-100 px-2 py-1 text-[12px] outline-none no-drag';
+  'glass-input max-w-full rounded-full px-3 py-1.5 text-[12px] no-drag disabled:cursor-not-allowed disabled:opacity-50';
 
 function SelectRow<K extends keyof AppSettings>({
   label,
@@ -98,6 +99,7 @@ function SelectRow<K extends keyof AppSettings>({
   return (
     <Row label={label}>
       <select
+        aria-label={label}
         className={selectCls}
         value={String(value)}
         disabled={disabled}
@@ -135,15 +137,17 @@ function GeneralTab() {
   return (
     <div>
       <Section label="主题颜色">
-        <div className="flex items-center gap-3 px-4 py-3.5">
+        <div className="flex flex-wrap items-center gap-3 px-5 py-5">
           {ACCENTS.map((c) => {
             const active = c === accent;
             return (
               <button
                 key={c}
+                aria-label={`主题颜色 ${c}`}
+                aria-pressed={active}
                 onClick={() => set('accentColor', c)}
-                className={`relative flex h-[34px] w-[34px] items-center justify-center rounded-full no-drag ${
-                  active ? 'ring-2 ring-offset-2 ring-gray-300' : ''
+                className={`relative flex h-9 w-9 items-center justify-center rounded-full shadow-sm transition-transform hover:scale-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent no-drag ${
+                  active ? 'ring-2 ring-offset-4 ring-accent/30' : ''
                 }`}
                 style={{ background: c }}
               >
@@ -156,6 +160,7 @@ function GeneralTab() {
       <Section label="通用">
         <Row label="默认启动模块">
           <select
+            aria-label="默认启动模块"
             className={selectCls}
             value={defaultModule}
             onChange={(e) =>
@@ -172,7 +177,7 @@ function GeneralTab() {
       </Section>
       <div className="mt-10 flex justify-center">
         <button
-          className="text-[13px] text-red-500 hover:opacity-80"
+          className="glass-button px-5 py-2.5 text-[13px] text-red-600"
           onClick={() => {
             if (window.confirm('确定恢复所有默认设置？')) {
               useSettings.getState().reset();
@@ -208,18 +213,19 @@ function ListTab() {
         footnote="关闭封面优先后，使用最接近指定时间的服务器章节缩略图；服务器未生成章节图时回退到封面。"
       >
         <ToggleRow label="显示媒体预览图" field="showPreviewImage" />
-        <div className="flex items-center gap-3 px-4 py-3">
-          <div className="flex-shrink-0 text-[13px]">视频预览图时间</div>
+        <div className="flex flex-wrap items-center gap-3 px-5 py-4">
+          <label htmlFor="preview-time" className="flex-shrink-0 text-[13px]">视频预览图时间</label>
           <input
+            id="preview-time"
             type="range"
             min={0}
             max={100}
             value={previewTime}
             disabled={!previewEnabled || preferCover}
             onChange={(e) => set('previewTimePercent', Number(e.target.value))}
-            className="w-full accent-[var(--accent)] no-drag"
+            className="min-w-[80px] flex-1 accent-[var(--accent)] no-drag"
           />
-          <div className="w-11 flex-shrink-0 text-right text-[12px] text-gray-500">
+          <div className="w-11 flex-shrink-0 text-right text-[12px] tabular-nums text-text-secondary">
             {previewTime}%
           </div>
         </div>
@@ -246,7 +252,7 @@ function ListTab() {
 
 function InfoCard({ text }: { text: string }) {
   return (
-    <div className="rounded-2xl bg-white px-4 py-6 text-center text-[13px] text-gray-400 shadow-card">
+    <div className="glass-surface px-6 py-12 text-center text-[13px] leading-relaxed text-text-secondary">
       {text}
     </div>
   );
@@ -369,6 +375,7 @@ function VideoTab() {
       >
         <Row label="首选解码模式">
           <select
+            aria-label="首选解码模式"
             className={selectCls}
             value={String(preferHw)}
             disabled={!isTauri}
@@ -450,7 +457,7 @@ function SubtitleTab() {
           ]}
         />
         <ToggleRow label="随 HDR 亮度调整字幕" field="hdrSubtitle" disabled={!isTauri} />
-        <div className="px-4 py-3 text-[11px] text-gray-400">桌面播放器可按 HDR 画面亮度调整字幕；关闭后使用 SDR 白色亮度。</div>
+        <div className="px-5 py-4 text-[12px] leading-relaxed text-text-secondary">桌面播放器可按 HDR 画面亮度调整字幕；关闭后使用 SDR 白色亮度。</div>
       </Section>
     </div>
   );
@@ -487,40 +494,56 @@ export default function Settings() {
   const [tab, setTab] = useState<TabId>('general');
 
   return (
-    <div className="h-full overflow-y-auto bg-page-bg">
-      {/* tab bar */}
-      <div className="flex justify-center gap-1 pt-4">
+    <div className="h-full overflow-y-auto px-4 pb-10 sm:px-8">
+      <div className="mx-auto max-w-[760px] pb-6 pt-8">
+        <h1 className="page-heading">设置</h1>
+        <p className="page-subtitle mt-2">让每一次播放，都更合你的习惯。</p>
+      </div>
+      <div className="sticky top-3 z-10 mx-auto max-w-[760px]">
+        <LiquidGlass intensity="subtle" className="glass-toolbar flex gap-1 overflow-x-auto p-2" role="tablist" aria-label="设置分类">
         {TABS.map(({ id, label, Icon }) => {
           const active = id === tab;
           return (
             <button
               key={id}
+              id={`settings-tab-${id}`}
+              role="tab"
+              aria-selected={active}
+              aria-controls="settings-content"
+              tabIndex={active ? 0 : -1}
               onClick={() => setTab(id)}
-              className="flex w-16 flex-col items-center gap-1 no-drag"
+              onKeyDown={(event) => {
+                const currentIndex = TABS.findIndex((entry) => entry.id === id);
+                let nextIndex: number;
+                if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % TABS.length;
+                else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + TABS.length) % TABS.length;
+                else if (event.key === 'Home') nextIndex = 0;
+                else if (event.key === 'End') nextIndex = TABS.length - 1;
+                else return;
+                event.preventDefault();
+                setTab(TABS[nextIndex].id);
+                document.getElementById(`settings-tab-${TABS[nextIndex].id}`)?.focus();
+              }}
+              className={`flex min-w-[60px] flex-1 flex-col items-center gap-1.5 rounded-[18px] px-2 py-2.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent no-drag ${active ? 'bg-white/85 text-accent shadow-sm ring-1 ring-white' : 'text-text-secondary hover:bg-white/45 hover:text-text-primary'}`}
             >
               <div
-                className={`rounded-xl p-2 transition-colors ${
-                  active
-                    ? 'bg-accent text-white'
-                    : 'text-gray-400 hover:text-gray-600'
-                }`}
+                className="p-1"
               >
                 <Icon size={20} />
               </div>
               <div
-                className={`text-[11px] ${
-                  active ? 'font-medium text-accent' : 'text-gray-400'
-                }`}
+                className={`text-[11px] ${active ? 'font-semibold' : 'font-medium'}`}
               >
                 {label}
               </div>
             </button>
           );
         })}
+        </LiquidGlass>
       </div>
 
       {/* content */}
-      <div className="mx-auto max-w-[640px] px-6 pb-16 pt-6">
+      <div id="settings-content" role="tabpanel" aria-labelledby={`settings-tab-${tab}`} className="mx-auto max-w-[680px] pb-16 pt-8">
         {tab === 'general' && <GeneralTab />}
         {tab === 'list' && <ListTab />}
         {tab === 'library' && <InfoCard text="媒体库设置将在后续版本提供" />}

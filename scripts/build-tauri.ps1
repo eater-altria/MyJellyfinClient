@@ -3,6 +3,8 @@
 # application after binary patching, then the uninstaller and installer.
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\env.ps1"
+& "$PSScriptRoot\ensure-mpv.ps1"
+& "$PSScriptRoot\check-runtime.ps1"
 & "$PSScriptRoot\sign.ps1" -Paths @(
   (Join-Path $projectRoot 'src-tauri\resources\mpv\mpv.exe'),
   (Join-Path $projectRoot 'src-tauri\resources\mpv\mpv.com')

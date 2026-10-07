@@ -335,15 +335,29 @@ local function draw_switch_icon(a, cx, cy, s, color, direction)
     draw_round_rect(a, x - s * 0.06, cy - s * 0.5, x + s * 0.06, cy + s * 0.5, s * 0.06, color)
 end
 
+-- A directional rim reflection adds depth without washing out video or text.
+-- Geometry remains identical to the GPU lens and mouse hit regions.
+local function draw_surface_sheen(a, x0, y0, x1, y1, radius, scale)
+    local left, right = x0 + radius, x1 - radius
+    if right <= left then return end
+    local step = (right - left) / 8
+    for i = 0, 7 do
+        local reflection = 0.10 + 0.18 * math.sin((i + 0.5) * math.pi / 8)
+        draw_round_rect(a, left + i * step, y0 + scale, left + (i + 1) * step,
+            y0 + 1.8 * scale, 0, ass_color(reflection, 1, 1, 1))
+    end
+    draw_round_rect(a, left, y1 - 1.8 * scale, right, y1 - scale,
+        0, ass_color(0.06, 1, 1, 1))
+end
+
 local function draw_surface(a, x0, y0, x1, y1, radius, scale)
     glass_surface(x0, y0, x1, y1, radius)
     draw_round_rect(a, x0 - 3 * scale, y0 + 4 * scale, x1 + 3 * scale, y1 + 5 * scale,
         radius + 3 * scale, ass_color(0.10, 0, 0, 0), 2 * scale)
-    draw_round_rect(a, x0, y0, x1, y1, radius, ass_color(0.12, 1, 1, 1))
+    draw_round_rect(a, x0, y0, x1, y1, radius, ass_color(0.16, 1, 1, 1))
     draw_round_rect(a, x0 + scale, y0 + scale, x1 - scale, y1 - scale, radius - scale,
         ass_color(0.28, 0.035, 0.035, 0.035))
-    draw_round_rect(a, x0 + radius, y0 + scale, x1 - radius, y0 + 2 * scale,
-        0, ass_color(0.18, 1, 1, 1))
+    draw_surface_sheen(a, x0, y0, x1, y1, radius, scale)
 end
 
 local function draw_ring(a, cx, cy, radius, thickness, color)
@@ -563,7 +577,7 @@ local function render_info()
     local fg = ass_color(0.98, 1, 1, 1)
     local dim = ass_color(0.65, 1, 1, 1)
     draw_round_rect(a, 0, 0, w, h, 0, ass_color(0.25, 0, 0, 0))
-    draw_surface(a, x, y, x + pw, y + ph, 18 * scale, scale)
+    draw_surface(a, x, y, x + pw, y + ph, 24 * scale, scale)
     draw_text(a, x + 28 * scale, y + 22 * scale, 21 * scale, fg, '媒体信息')
     draw_text(a, x + pw - 28 * scale, y + 24 * scale, 15 * scale, dim, '关闭 ×', 9)
     zone(state.info_zones, x + pw - 115 * scale, y + 10 * scale, x + pw - 12 * scale, y + 60 * scale,
@@ -698,7 +712,7 @@ function render_bar()
     end
     if state.paused and has_video then
         local px, py = w - 102 * scale, 16 * scale
-        draw_surface(a, px, py, w - 16 * scale, py + 32 * scale, 10 * scale, scale)
+        draw_surface(a, px, py, w - 16 * scale, py + 32 * scale, 16 * scale, scale)
         draw_pause_icon(a, px + 20 * scale, py + 16 * scale, 11 * scale, fg)
         draw_text(a, px + 36 * scale, py + 6 * scale, 12 * scale, fg, '已暂停')
     end
@@ -719,16 +733,16 @@ function render_bar()
         state.bar_top = by
         state.bar_bounds = {x0 = 0, y0 = by, x1 = w, y1 = h}
         -- Separate opacities make the surface and the timeline read as distinct layers.
-        glass_surface(0, by, w, h, 10 * scale)
-        draw_round_rect(a, 0, by, w, h, 10 * scale, ass_color(0.08, 1, 1, 1))
-        draw_round_rect(a, scale, by + scale, w - scale, h, 9 * scale, ass_color(0.20, 0, 0, 0))
-        draw_round_rect(a, 10 * scale, by, w - 10 * scale, by + scale, 0, ass_color(0.10, 1, 1, 1))
+        glass_surface(0, by, w, h, 18 * scale)
+        draw_round_rect(a, 0, by, w, h, 18 * scale, ass_color(0.10, 1, 1, 1))
+        draw_round_rect(a, scale, by + scale, w - scale, h, 17 * scale, ass_color(0.20, 0, 0, 0))
+        draw_surface_sheen(a, 0, by, w, h, 18 * scale, scale)
         local tooltip, tooltip_x
         local function feedback(x, y, width, height, label, selected)
             local hovered = not state.menu and not state.info_visible and mx >= x and mx <= x + width and my >= y and my <= y + height
             if hovered or selected then
                 draw_round_rect(a, x + 2 * scale, y + (height - 32 * scale) / 2,
-                    x + width - 2 * scale, y + (height + 32 * scale) / 2, 8 * scale,
+                    x + width - 2 * scale, y + (height + 32 * scale) / 2, 12 * scale,
                     ass_color(hovered and 0.14 or 0.08, 1, 1, 1))
             end
             if hovered then tooltip, tooltip_x = label, x + width / 2 end
@@ -831,14 +845,14 @@ function render_bar()
         if tooltip then
             local tw = text_width(tooltip, 12 * scale) + 24 * scale
             local hx = clamp(tooltip_x - tw / 2, 8 * scale, w - 8 * scale - tw)
-            draw_surface(a, hx, by - 40 * scale, hx + tw, by - 8 * scale, 8 * scale, scale)
+            draw_surface(a, hx, by - 40 * scale, hx + tw, by - 8 * scale, 16 * scale, scale)
             draw_text(a, hx + tw / 2, by - 34 * scale, 12 * scale, fg, tooltip, 8)
         end
         -- Secondary tools float beside the picture, as in the visual reference.
         if not compact and h >= 320 * scale then
             local rail_x, rail_y = w - 48 * scale, h / 2 - 38 * scale
             local tool_h = state.settings.showScreenshotButton and 76 * scale or 38 * scale
-            draw_surface(a, rail_x, rail_y, rail_x + 36 * scale, rail_y + tool_h, 10 * scale, scale)
+            draw_surface(a, rail_x, rail_y, rail_x + 36 * scale, rail_y + tool_h, 18 * scale, scale)
             local tools = state.settings.showScreenshotButton and {'screenshot', 'info'} or {'info'}
             for i, id in ipairs(tools) do
                 local y = rail_y + (i - 1) * 38 * scale
@@ -849,7 +863,7 @@ function render_bar()
                         8 * scale, ass_color(0.12, 1, 1, 1))
                     local label = id == 'screenshot' and '截图' or '媒体信息'
                     local tw = text_width(label, 12 * scale) + 20 * scale
-                    draw_surface(a, rail_x - tw - 8 * scale, y + 3 * scale, rail_x - 8 * scale, y + 35 * scale, 8 * scale, scale)
+                    draw_surface(a, rail_x - tw - 8 * scale, y + 3 * scale, rail_x - 8 * scale, y + 35 * scale, 16 * scale, scale)
                     draw_text(a, rail_x - tw / 2 - 8 * scale, y + 9 * scale, 12 * scale, fg, label, 8)
                 end
                 local col = fg
@@ -1067,7 +1081,7 @@ function render_menu()
             local anchor = state.menu_anchors[state.menu] or state.menu_anchors.more or (w - m - pw / 2)
             local px = clamp(anchor - pw / 2, m, w - m - pw)
             local py = bar_top - 10 * scale - ph
-            draw_surface(a, px, py, px + pw, py + ph, 14 * scale, scale)
+            draw_surface(a, px, py, px + pw, py + ph, 22 * scale, scale)
             if total_items > #items then
                 local track_h = ph - 16 * scale
                 local thumb_h = math.max(12 * scale, track_h * #items / total_items)

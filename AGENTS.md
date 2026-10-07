@@ -10,7 +10,7 @@
 
 ## 项目定位
 
-这是一个 Windows x64 Jellyfin / Emby 桌面客户端，界面主要为中文，采用 SenPlayer 风格。前端使用 React 18、TypeScript、Vite、Tailwind CSS、Zustand 和 React Router；桌面壳使用 Tauri 2，原生播放使用独立 mpv 进程。
+这是一个 Windows x64 Jellyfin / Emby 桌面客户端，界面主要为中文，采用受 Apple Liquid Glass 启发的玻璃表面与浮动导航。前端使用 React 18、TypeScript、Vite、Tailwind CSS、Zustand 和 React Router；桌面壳使用 Tauri 2，原生播放使用独立 mpv 进程。
 
 公开仓库：<https://github.com/eater-altria/MyJellyfinClient>。仓库源码、GitHub Release 和用户正在运行的安装版可能不是同一版本，排查前应核对提交和安装包来源。
 
@@ -28,6 +28,9 @@
 | `src/pages/Home.tsx`、`src/pages/Library.tsx` | 首页分类、最新内容、媒体库、合集和分页 |
 | `src/utils/listPresentation.ts` | 列表元信息、预览图片、HDR/分辨率、文件夹排序 |
 | `src/components/PosterCard.tsx`、`EpisodeRow.tsx`、`SectionRow.tsx` | 共享卡片、剧集行、横向列表 |
+| `src/components/LiquidGlass.tsx`、`src/utils/liquidGlass.ts`、`src/index.css` | 网页玻璃表面、圆角边缘位移图、主题与材质；只折射背景，正文保持清晰 |
+| `src/components/GlassButton.tsx` | 共用列表导航按钮的原生 button、独立玻璃背景与清晰文字；保留事件、禁用、焦点及表单语义 |
+| `src/components/AppBackdrop.tsx`、`src/store/appBackdrop.ts` | 首页轮播/详情媒体背景的临时共享、路由/实例隔离和环境玻璃底色；不持久化图片 URL |
 | `src/pages/NativePlayer.tsx` | 原生播放启动、事件订阅、进度上报和退出协调 |
 | `src/pages/Player.tsx` | 浏览器 HTML5/HLS 播放回退 |
 | `src/player/` | 播放偏好记忆、相邻媒体、键盘操作及退出事件 |
@@ -60,11 +63,14 @@ rustc -vV
 
 PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可能被按本地编码误读；当前 `.ps1` 使用 ASCII 文本。新增中文时应使用兼容编码并实际验证解析。对确认可信的下载脚本可使用 `Unblock-File` 清除来源标记，不应为此修改系统范围的执行策略。
 
-准备 `src-tauri/resources/mpv/mpv.exe`、`mpv.com` 及构建包随附 DLL，保留仓库自带的 `mjc-osc.lua` 和 `mjc-glass.glsl`。这些二进制被 Git 忽略，克隆仓库后需自行准备；控制脚本和 shader 是源码，必须提交。下载来源见 README。
+`dev-tauri.ps1` 和 `build-tauri.ps1` 通过 `scripts/ensure-mpv.ps1` 自动准备 `src-tauri/resources/mpv/mpv.exe`、`mpv.com` 及构建包随附 DLL。二进制缺失或为空时，从 shinchiro 最新 Release 下载普通 x86_64 包，校验大小、SHA-256 和 EXE 架构，再使用 Windows `curl.exe` / `tar.exe` 安装同一套二进制；完整资源不联网或自动升级。临时下载目录位于 `.tmp`，成功或失败均清理，安装失败尝试恢复原有二进制。保留仓库自带的 `mjc-osc.lua` 和 `mjc-glass.glsl`，不接触 `.local`。这些二进制被 Git 忽略，也可单独运行准备脚本或离线手动准备；控制脚本和 shader 是源码，必须提交。下载来源见 README。
+
+自动准备 mpv 后，两个入口在启动开发服务、编译或签名前调用 `scripts/check-runtime.ps1`，检查 mpv EXE、COM、DLL、控制脚本、shader 和 WebView2Loader 是否存在且非空。仓库资源缺失时直接给出文件路径与恢复方法；也可从可信安装版的 `mpv` 目录复制同一套二进制，不能覆盖仓库控制脚本和 shader。
 
 ## 数据与清理
 
 - 开发脚本默认把 WebView2 数据保存在 `.local/webview2`；可通过 `MJC_WEBVIEW_DATA` 覆盖。安装版默认使用系统应用数据目录。
+- Vite 文件监听排除 `.local`，避免 WebView2 独占 Cookie 等持久文件时触发 `EBUSY` 并终止开发服务；不能用删除开发数据解决监听问题。
 - 开发版截图保存在 `MJC_WEBVIEW_DATA/screenshots`（默认 `.local/webview2/screenshots`）；安装版优先使用系统图片目录的 `MyJellyfinClient` 文件夹，不可写时回退到应用本地数据目录的 `screenshots`。保存前验证真实文件写入权限，失败时清理本次预留文件；截图属于用户数据。
 - `.local` 包含开发账号、登录状态、设置和偏好，删除会重置开发版数据。它不是纯构建缓存。
 - `.local`、`.codex-remote-attachments`、环境文件、密钥、日志、构建产物及 mpv 二进制不应提交。不要把用户提供的服务器地址、密码、令牌或截图写入源码和测试。
@@ -131,6 +137,8 @@ npm run test:home
 npm run test:servers
 npm run test:settings
 npm run test:playback
+npm run test:ui
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/test-mpv-setup.ps1
 
 . ./scripts/env.ps1
 cargo test --manifest-path src-tauri/Cargo.toml --lib
@@ -138,6 +146,12 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 ```
 
 `test:home` 覆盖全部分类、8 个合集、成员浏览、多页加载、重试和取消；`test:servers` 使用本地 HTTP fixture；`test:playback` 覆盖关闭、元数据标题及慢网络生命周期；`test:settings` 覆盖真实组件、偏好和 3 秒迁移。Rust/Lua 测试覆盖原生输入、启动重试、TLS、截图目录回退、真实 GPU/ASS 渲染、毛玻璃像素效果和截图隔离、开播窗口比例及响应式控件，需本地 mpv 和 Windows 环境。Rust 回归同时运行 Lua 控件交互测试；原生控件渲染使用 `scripts/test-player-osc-render.lua` 的合成媒体状态，不读取账号或服务器截图。
+
+`test-mpv-setup.ps1` 在 Windows PowerShell 5.1 下使用离线传输 fixture 和真实 `tar.exe` 验证缺失下载、完整资源复用、部分资源修复、控制脚本保留、校验失败、架构与压缩包检查、安装回滚和临时目录清理，不使用账号或访问网络。
+
+`test:ui` 覆盖圆角玻璃透镜的中性中心、增强边缘折射、长面板采样、纹理尺寸与缓存、ResizeObserver/动画帧清理，首页/详情临时背景的路由/实例隔离、预览开关与图片失败重试，以及搜索/记录失败重试、迟到响应和弹窗 StrictMode 焦点恢复。玻璃材质需另用实际 Chromium/WebView2 视觉核对；其他浏览器保留模糊和高光回退。海报、头像与轨道卡片使用轻量静态表面，不为每个媒体项目创建 SVG 透镜；首页媒体区只用一个随滚动保持在可见窗口内的玻璃层，避免无限分页扩大 GPU 材质尺寸。减少动态效果、高对比度与减少透明度偏好有 CSS 回退。
+
+`test:ui` 中的玻璃按钮回归使用真实 React 与无头 Chromium 验证原生点击、禁用、ref、表单类型、事件透传和列表导航。默认查找本机 Chrome / Edge，可用 `MJC_TEST_CHROMIUM` 指定可信浏览器路径；测试只用合成页面与独立临时 profile，不使用用户浏览器账号或访问服务器，结束后清理经过路径校验的临时目录。
 
 若受限执行环境无法读取构建工具目录或系统临时目录，应区分权限问题和代码问题。必要时为本次验证指定可写的临时目录，不能据此改坏用户正常构建配置；不要在敏感输出中打印令牌。
 

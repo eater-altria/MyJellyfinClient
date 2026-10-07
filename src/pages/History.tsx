@@ -36,16 +36,19 @@ export default function HistoryPage() {
 
   const [items, setItems] = useState<BaseItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
-    if (!api) return;
+    let cancelled = false;
     setItems(null);
     setError(null);
+    if (!api) return;
     api
       .getPlayedItems(60)
-      .then((r) => setItems(r.Items))
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  }, [api]);
+      .then((r) => { if (!cancelled) setItems(r.Items); })
+      .catch(() => { if (!cancelled) setError('无法加载播放记录，请检查服务器连接后重试。'); });
+    return () => { cancelled = true; };
+  }, [api, retry]);
 
   const groups = useMemo<Group[]>(() => {
     if (!items || items.length === 0) return [];
@@ -78,17 +81,20 @@ export default function HistoryPage() {
   if (!api) {
     body = <EmptyState icon={<IconHistory size={40} />} title="请先添加并选择服务器" />;
   } else if (error) {
-    body = <ErrorState message={error} />;
+    body = <ErrorState message={error} onRetry={() => setRetry((value) => value + 1)} />;
   } else if (items == null) {
     body = <Spinner label="加载中…" />;
   } else if (groups.length === 0) {
     body = <EmptyState icon={<IconHistory size={40} />} title="暂无播放记录" />;
   } else {
     body = (
-      <div className="mt-6 flex flex-col gap-7">
+      <div className="mt-8 flex flex-col gap-8">
         {groups.map((g) => (
           <section key={g.label}>
-            <div className="mb-2 text-[13px] text-gray-400">{g.label}</div>
+            <div className="mb-4 flex items-center gap-3">
+              <h2 className="text-[14px] font-medium text-text-secondary">{g.label}</h2>
+              <div className="h-px flex-1 bg-black/[0.045]" />
+            </div>
             <div className="flex flex-wrap gap-4">
               {orderMediaItems(g.items, foldersFirst).map((item) => (
                 <PosterCard
@@ -108,8 +114,9 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto px-6 pb-10">
-      <h1 className="mt-6 text-xl font-semibold text-text-primary">记录{showCount && items ? `（${items.length}）` : ''}</h1>
+    <div className="h-full overflow-y-auto px-4 pb-10 sm:px-8">
+      <h1 className="page-heading mt-8">记录{showCount && items ? `（${items.length}）` : ''}</h1>
+      <p className="page-subtitle mt-2">接续上一次的故事，重温喜欢的片刻。</p>
       {body}
     </div>
   );

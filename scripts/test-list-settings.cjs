@@ -27,7 +27,12 @@ const icons = load('src/components/icons.tsx');
 const PosterCard = load('src/components/PosterCard.tsx', {
   '../api/mediaServer': media, '../store/settings': store, '../utils/listPresentation': presentation, './icons': icons,
 }).default;
-const SectionRow = load('src/components/SectionRow.tsx', { '../store/settings': store, './icons': icons }).default;
+const glass = load('src/utils/liquidGlass.ts');
+const LiquidGlass = load('src/components/LiquidGlass.tsx', { '../utils/liquidGlass': glass });
+const GlassButton = load('src/components/GlassButton.tsx', { './LiquidGlass': LiquidGlass });
+const SectionRow = load('src/components/SectionRow.tsx', {
+  '../store/settings': store, './icons': icons, './LiquidGlass': LiquidGlass, './GlassButton': GlassButton,
+}).default;
 const EpisodeRow = load('src/components/EpisodeRow.tsx', {
   './PosterCard': { __esModule: true, default: PosterCard }, 'react-router-dom': { useNavigate: () => () => {} },
 }).default;
@@ -101,10 +106,11 @@ assert(!renderCard(folder).includes('2026-01-02'));
 assert.equal(presentation.mediaFolderDate(item), '', 'Movie dates are not folder dates');
 assert.equal(presentation.mediaFolderDate({ ...folder, DateCreated: 'invalid' }), '');
 const title = () => renderToStaticMarkup(React.createElement(SectionRow, { title: 'Movies', count: 20 }, 'contents'));
-assert(title().includes('Movies（20）'));
+const renderedText = (markup) => markup.replace(/<[^>]*>/g, '');
+assert(renderedText(title()).includes('Movies（20）'));
 const missingCount = renderToStaticMarkup(React.createElement(SectionRow, { title: 'Movies' }, 'contents'));
 assert(!missingCount.includes('undefined')); assert(!missingCount.includes('Movies（'));
-assert(renderToStaticMarkup(React.createElement(SectionRow, { title: 'Movies', count: 0 }, 'contents')).includes('Movies（0）'));
+assert(renderedText(renderToStaticMarkup(React.createElement(SectionRow, { title: 'Movies', count: 0 }, 'contents'))).includes('Movies（0）'));
 settings.showItemCountInTitle = false;
 assert(!title().includes('（20）'));
 const original = [{ Id: 'm1', Type: 'Movie' }, { Id: 's1', Type: 'Series' }, { Id: 'm2', Type: 'Movie' }, { Id: 's2', IsFolder: true }];
@@ -180,6 +186,7 @@ async function checkLibraryQueries() {
     '../store/servers': { useServers: { getState: () => ({ getApi: () => libraryApi }) } },
     '../store/settings': store, '../utils/listPresentation': presentation,
     '../components/PosterCard': { __esModule: true, default: 'Poster' },
+    '../components/LiquidGlass': { __esModule: true, default: 'Glass' },
     '../components/Feedback': { EmptyState: 'Empty', ErrorState: 'Error', Spinner: 'Spinner' },
     '../components/icons': icons,
   }).default;

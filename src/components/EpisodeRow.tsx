@@ -10,7 +10,7 @@ export default function EpisodeRow({ api, episodes, serverId }: {
 }) {
   const navigate = useNavigate();
   return (
-    <div className="flex gap-3 overflow-x-auto pb-2" style={{ scrollbarWidth: 'none' }}>
+    <div className="flex gap-4 overflow-x-auto pb-3 pt-1" style={{ scrollbarWidth: 'none' }}>
       {episodes.map((episode) => (
         <PosterCard
           key={episode.Id}

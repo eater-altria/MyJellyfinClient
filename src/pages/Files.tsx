@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { IconFolder } from '../components/icons';
+import LiquidGlass from '../components/LiquidGlass';
 
 export default function Files() {
   const [toast, setToast] = useState(false);
@@ -12,14 +13,18 @@ export default function Files() {
   }, [toast]);
 
   return (
-    <div className="relative h-full bg-page-bg">
-      {/* top-center segmented control */}
-      <div className="absolute left-1/2 top-4 z-10 -translate-x-1/2">
-        <div className="seg-control">
-          <button className={seg === 'local' ? 'active' : ''} onClick={() => setSeg('local')}>
+    <div className="relative flex h-full flex-col overflow-y-auto px-4 pb-8 sm:px-8">
+      <div className="flex flex-wrap items-center justify-between gap-4 pt-8">
+        <div>
+          <h1 className="page-heading">文件</h1>
+          <p className="page-subtitle mt-2">本地媒体与网络链接</p>
+        </div>
+        <div className="seg-control" aria-label="文件来源">
+          <button aria-pressed={seg === 'local'} className={seg === 'local' ? 'active' : ''} onClick={() => setSeg('local')}>
             本地文件
           </button>
           <button
+            aria-pressed={seg === 'network'}
             className={seg === 'network' ? 'active' : ''}
             onClick={() => {
               setSeg('network');
@@ -31,30 +36,36 @@ export default function Files() {
         </div>
       </div>
 
-      {/* empty state */}
-      <div className="flex h-full flex-col items-center justify-center gap-5">
-        <div className="flex h-24 w-24 items-center justify-center rounded-3xl bg-gradient-to-br from-sky-200 to-blue-300">
-          <IconFolder size={44} className="text-white" />
-        </div>
-        <div className="flex flex-col items-center gap-2.5">
+      <div className="flex min-h-[420px] flex-1 items-center justify-center py-8">
+        <LiquidGlass intensity="subtle" className="flex w-full max-w-[420px] flex-col items-center gap-5 px-7 py-10 text-center">
+          <div className="glass-surface flex h-20 w-20 items-center justify-center text-accent">
+            <IconFolder size={38} />
+          </div>
+          <div>
+            <span className="glass-badge text-[11px]">即将推出</span>
+            <h2 className="mt-4 text-[21px] font-semibold tracking-tight text-text-primary">{seg === 'local' ? '你的本地放映室' : '用链接发现更多内容'}</h2>
+            <p className="mt-2 text-[13px] leading-relaxed text-text-secondary">{seg === 'local' ? '本地文件与文件夹播放将在后续版本提供。现在可以连接服务器，开始观看。' : '网络链接播放将在后续版本提供。'}</p>
+          </div>
+          <div className="flex w-full flex-wrap items-center justify-center gap-3 pt-1">
           <button
-            className="rounded-full bg-white px-8 py-2.5 text-[13px] shadow-card hover:shadow-card-hover"
+            className="glass-button-primary px-6 py-2.5 text-[13px]"
             onClick={() => setToast(true)}
           >
             打开文件
           </button>
           <button
-            className="rounded-full bg-white px-8 py-2.5 text-[13px] shadow-card hover:shadow-card-hover"
+            className="glass-button px-6 py-2.5 text-[13px]"
             onClick={() => setToast(true)}
           >
             挂载文件夹
           </button>
-        </div>
+          </div>
+        </LiquidGlass>
       </div>
 
       {/* toast */}
       {toast && (
-        <div className="fade-in absolute bottom-8 left-1/2 -translate-x-1/2 rounded-full bg-black/75 px-4 py-2 text-xs text-white">
+        <div role="status" className="glass-toolbar fade-in absolute bottom-6 left-1/2 z-20 max-w-[calc(100%-32px)] -translate-x-1/2 whitespace-nowrap px-5 py-3 text-[12px] text-text-primary">
           该功能将在后续版本提供
         </div>
       )}

@@ -3,10 +3,12 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { BaseItem, MediaServerApi } from '../api/mediaServer';
 import { useServers } from '../store/servers';
 import { useSettings } from '../store/settings';
+import { useAppBackdrop } from '../store/appBackdrop';
 import { mediaFolderDate, orderMediaItems } from '../utils/listPresentation';
 import SectionRow from '../components/SectionRow';
 import PosterCard from '../components/PosterCard';
 import HeroCarousel from '../components/HeroCarousel';
+import LiquidGlass from '../components/LiquidGlass';
 import { EmptyState, ErrorState, Spinner } from '../components/Feedback';
 import { IconServer } from '../components/icons';
 
@@ -40,7 +42,7 @@ interface ViewItems {
   error: boolean;
 }
 
-/** /server/:serverId — immersive SenPlayer server home. */
+/** /server/:serverId — content-first server home with floating glass navigation. */
 export default function HomePage() {
   const { serverId = '' } = useParams();
   // Keep pending pages and carousel state scoped to the server/account.
@@ -51,7 +53,6 @@ export default function HomePage() {
 function ServerHome({ serverId }: { serverId: string }) {
   const navigate = useNavigate();
   const settings = useSettings();
-  const server = useServers((s) => s.servers.find((x) => x.id === serverId));
   const api = useMemo<MediaServerApi | null>(
     () => useServers.getState().getApi(serverId),
     [serverId],
@@ -64,6 +65,9 @@ function ServerHome({ serverId }: { serverId: string }) {
   const [retry, setRetry] = useState(0);
   const generation = useRef(0);
   const requests = useRef(new Map<string, AbortController>());
+  const backdropOwner = useRef({});
+  const backdropActive = useRef(true);
+  const lastHeroItem = useRef<BaseItem | null>(null);
 
   const loadView = useCallback(async (view: BaseItem, offset = 0) => {
     if (!api || requests.current.has(view.Id)) return;
@@ -101,6 +105,30 @@ function ServerHome({ serverId }: { serverId: string }) {
   const heroItems = useMemo(() => [...new Map(views.flatMap(view => itemsByView[view.Id]?.items ?? [])
     .map(item => [item.Id, item])).values()]
     .filter(item => ['Movie', 'Series', 'Episode', 'Video'].includes(item.Type ?? '') && api?.backdropUrl(item, 1920)), [api, views, itemsByView]);
+
+  const handleHeroChange = useCallback((item: BaseItem | null) => {
+    lastHeroItem.current = item;
+    if (!backdropActive.current) return;
+    const url = api && settings.showPreviewImage && !loading && !viewsError && item
+      ? api.backdropUrl(item, 1920) : null;
+    useAppBackdrop.getState().setBackdrop(backdropOwner.current, `/server/${serverId}`, url);
+  }, [api, serverId, settings.showPreviewImage, loading, viewsError]);
+
+  useEffect(() => {
+    backdropActive.current = true;
+    // Replay after StrictMode's cleanup, including when the child's effect ran first.
+    handleHeroChange(lastHeroItem.current);
+    return () => {
+      backdropActive.current = false;
+      useAppBackdrop.getState().clearBackdrop(backdropOwner.current);
+    };
+  }, [handleHeroChange]);
+
+  useEffect(() => {
+    if (!heroItems.length || !settings.showPreviewImage || loading || viewsError) {
+      useAppBackdrop.getState().clearBackdrop(backdropOwner.current);
+    }
+  }, [heroItems.length, settings.showPreviewImage, loading, viewsError]);
 
   useEffect(() => {
     if (!api) return;
@@ -148,7 +176,7 @@ function ServerHome({ serverId }: { serverId: string }) {
       >
         <button
           onClick={() => navigate('/servers')}
-          className="mt-1 rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-white transition hover:opacity-90"
+          className="glass-button-primary mt-1 px-5 py-2.5 text-[13px] font-medium"
         >
           前往服务器
         </button>
@@ -168,13 +196,13 @@ function ServerHome({ serverId }: { serverId: string }) {
   };
 
   const rowStatus = (view: BaseItem, row?: ViewItems) => <>
-    {(!row || row.loading) && <div className="flex min-h-40 min-w-44 items-center justify-center text-sm text-gray-400" role="status">加载中…</div>}
-    {row?.error && <div className="flex min-h-40 min-w-52 flex-col items-center justify-center gap-3 rounded-xl bg-white px-4 text-sm text-gray-500">
+    {(!row || row.loading) && <div className="glass-surface flex min-h-40 min-w-44 items-center justify-center rounded-[24px] text-sm text-text-secondary" role="status">加载中…</div>}
+    {row?.error && <div className="glass-surface flex min-h-40 min-w-52 flex-col items-center justify-center gap-3 rounded-[24px] px-4 text-sm text-text-secondary">
       <span>此列表暂时加载失败</span>
-      <button onClick={() => { void loadView(view, row.offset); }} className="rounded-lg bg-accent px-4 py-1.5 text-white">重试</button>
+      <button onClick={() => { void loadView(view, row.offset); }} className="glass-button-primary px-4 py-1.5">重试</button>
     </div>}
-    {row && !row.loading && !row.error && row.items.length === 0 && <div className="flex min-h-40 min-w-52 items-center justify-center text-sm text-gray-400">此分类暂无内容</div>}
-    {row?.hasMore && !row.loading && !row.error && <button onClick={() => { void loadView(view, row.offset); }} className="my-2 min-w-32 shrink-0 rounded-xl bg-white px-4 text-sm text-accent shadow-card">加载更多</button>}
+    {row && !row.loading && !row.error && row.items.length === 0 && <div className="glass-surface flex min-h-40 min-w-52 items-center justify-center rounded-[24px] text-sm text-text-secondary">此分类暂无内容</div>}
+    {row?.hasMore && !row.loading && !row.error && <button onClick={() => { void loadView(view, row.offset); }} className="glass-button my-2 min-w-32 shrink-0 px-4 text-sm text-accent">加载更多</button>}
   </>;
   const loadMore = (view: BaseItem) => {
     const row = itemsByView[view.Id];
@@ -184,23 +212,23 @@ function ServerHome({ serverId }: { serverId: string }) {
   const nextRow = itemsByView[NEXT_VIEW.Id];
 
   return (
-    <div className="h-full overflow-y-auto px-8 pb-10">
-      {/* Slim transparent header over the hero */}
-      <div className="relative z-10 flex h-12 items-center">
-        <span className="text-[13px] text-gray-500">{server?.name ?? '服务器'}</span>
-      </div>
-
+    <div className="h-full overflow-y-auto px-5 pb-10 lg:px-8">
       {loading ? (
         <Spinner label="正在加载媒体库…" />
       ) : viewsError ? (
         <ErrorState message="无法加载媒体分类，请检查服务器连接后重试。" onRetry={() => setRetry(value => value + 1)} />
       ) : (
         <>
-          {/* Hero slides up under the header */}
-          {settings.showPreviewImage && <div className="-mt-12">
-            <HeroCarousel api={api} items={heroItems} serverId={serverId} />
+          {settings.showPreviewImage && <div>
+            <HeroCarousel api={api} items={heroItems} serverId={serverId} onCurrentItemChange={handleHeroChange} />
           </div>}
 
+          {(views.length > 0 || !!resumeRow?.items.length || !!resumeRow?.error || !!nextRow?.items.length || !!nextRow?.error) && (
+          <div className="home-media-board">
+            <div className="home-media-glass-track" aria-hidden="true">
+              <LiquidGlass intensity="prominent" className="home-media-surface" />
+            </div>
+            <div className="home-media-content">
           {/* 我的媒体 */}
           {views.length > 0 && (
             <SectionRow title="我的媒体" count={views.length}>
@@ -213,7 +241,7 @@ function ServerHome({ serverId }: { serverId: string }) {
                   <button
                     key={view.Id}
                     onClick={() => navigate(`/server/${serverId}/library/${view.Id}`)}
-                    className={`relative h-[110px] w-[200px] shrink-0 overflow-hidden rounded-2xl bg-gradient-to-br ${gradient} text-left shadow-card transition-all hover:-translate-y-0.5 hover:shadow-card-hover`}
+                    className={`media-card relative h-[120px] w-[220px] shrink-0 overflow-hidden rounded-[24px] bg-gradient-to-br ${gradient} text-left shadow-card ring-1 ring-white/80`}
                   >
                     {/* Fan stack of posters on the right */}
                     <div className="absolute inset-y-0 right-0 w-24">
@@ -227,7 +255,7 @@ function ServerHome({ serverId }: { serverId: string }) {
                             src={url}
                             alt=""
                             draggable={false}
-                            className={`absolute top-1/2 h-[88px] w-[60px] rounded-lg shadow-md ${settings.thumbnailFill ? 'object-cover' : 'object-contain'}`}
+                            className={`absolute top-1/2 h-[96px] w-[66px] rounded-xl shadow-md ring-1 ring-white/50 ${settings.thumbnailFill ? 'object-cover' : 'object-contain'}`}
                             style={{
                               right: 6 + ti * 12,
                               transform: `translateY(-50%) rotate(${rotations[ti % rotations.length]}deg)`,
@@ -237,8 +265,8 @@ function ServerHome({ serverId }: { serverId: string }) {
                         );
                       })}
                     </div>
-                    <div className="relative z-10 flex h-full flex-col justify-end p-3.5">
-                      <div className="text-[14px] font-semibold text-text-primary">
+                    <div className="relative z-10 flex h-full max-w-[75%] flex-col justify-end bg-gradient-to-r from-white/75 via-white/40 to-transparent p-4">
+                      <div className="line-clamp-2 text-[14px] font-semibold text-text-primary">
                         {view.Name}{settings.showItemCountInTitle && childCount != null ? `（${childCount}）` : ''}
                       </div>
                       <div className="mt-0.5 text-[11px] text-text-secondary">
@@ -311,6 +339,9 @@ function ServerHome({ serverId }: { serverId: string }) {
               </SectionRow>
             );
           })}
+            </div>
+          </div>
+          )}
         </>
       )}
     </div>

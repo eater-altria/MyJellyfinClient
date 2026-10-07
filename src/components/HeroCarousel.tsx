@@ -2,16 +2,19 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MediaServerApi, BaseItem } from '../api/mediaServer';
 import { IconChevronLeft, IconChevronRight } from './icons';
+import LiquidGlass from './LiquidGlass';
 
 /** Full-width cross-fading hero carousel fed by items with backdrops. */
 export default function HeroCarousel({
   api,
   items,
   serverId,
+  onCurrentItemChange,
 }: {
   api: MediaServerApi;
   items: BaseItem[];
   serverId: string;
+  onCurrentItemChange?: (item: BaseItem | null) => void;
 }) {
   const navigate = useNavigate();
   const [index, setIndex] = useState(0);
@@ -44,6 +47,8 @@ export default function HeroCarousel({
     if (count > 0 && index >= count) setIndex(0);
   }, [count, index]);
 
+  useEffect(() => { onCurrentItemChange?.(current); }, [current, onCurrentItemChange]);
+
   if (!current) return null;
 
   const openDetail = () => {
@@ -55,10 +60,9 @@ export default function HeroCarousel({
 
   return (
     <div
-      className="relative aspect-video w-full cursor-pointer overflow-hidden rounded-2xl bg-gray-900"
+      className="relative aspect-video min-h-[240px] w-full overflow-hidden rounded-[28px] bg-slate-900 shadow-card ring-1 ring-white/70"
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
-      onClick={openDetail}
     >
       {/* Cross-fading backdrops */}
       {visibleIndexes.map(i => {
@@ -78,8 +82,14 @@ export default function HeroCarousel({
         );
       })}
 
+      <button
+        onClick={openDetail}
+        aria-label={`查看${current.Name}详情`}
+        className="absolute inset-0 rounded-[28px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-4px] focus-visible:outline-white"
+      />
+
       {/* Bottom gradient overlay */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/60 via-black/25 to-transparent" />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/50 via-black/10 to-transparent" />
 
       {/* Chevron buttons */}
       {count > 1 && (
@@ -89,7 +99,8 @@ export default function HeroCarousel({
               e.stopPropagation();
               go(-1);
             }}
-            className="absolute left-4 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur transition hover:bg-white/40"
+            aria-label="上一张预览"
+            className="glass-icon-button glass-dark absolute right-[68px] top-5 z-20 h-10 w-10 text-white"
           >
             <IconChevronLeft size={18} />
           </button>
@@ -98,33 +109,34 @@ export default function HeroCarousel({
               e.stopPropagation();
               go(1);
             }}
-            className="absolute right-4 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur transition hover:bg-white/40"
+            aria-label="下一张预览"
+            className="glass-icon-button glass-dark absolute right-5 top-5 z-20 h-10 w-10 text-white"
           >
             <IconChevronRight size={18} />
           </button>
         </>
       )}
 
-      {/* Bottom centered content */}
-      <div className="absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 px-6 pb-8 text-center sm:gap-2.5 sm:px-10 sm:pb-9">
+      {/* The scenic image remains dominant; the caption floats on a glass surface. */}
+      <LiquidGlass tone="dark" intensity="subtle" className="pointer-events-none absolute bottom-12 left-5 right-5 flex flex-col items-start gap-2 rounded-[24px] p-4 text-left sm:left-6 sm:right-auto sm:max-w-[62%] sm:gap-3 sm:p-5">
         {logo ? (
           <img
             src={logo}
             alt={current.Name}
             draggable={false}
-            className="max-h-16 max-w-[70%] object-contain sm:max-h-24 drop-shadow-lg"
+            className="max-h-14 max-w-full object-contain drop-shadow-lg sm:max-h-20"
           />
         ) : (
-          <h1 className="line-clamp-2 text-xl font-bold text-white drop-shadow sm:text-3xl">{current.Name}</h1>
+          <h1 className="line-clamp-2 text-xl font-semibold tracking-tight text-white drop-shadow sm:text-3xl">{current.Name}</h1>
         )}
 
-        <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[13px] text-white/90">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-white/90">
           {current.CommunityRating != null && (
             <span className="text-amber-300">★ {current.CommunityRating.toFixed(1)}</span>
           )}
           {current.ProductionYear != null && <span>{current.ProductionYear}</span>}
           {current.OfficialRating && (
-            <span className="rounded border border-white/50 px-1 text-xs leading-4">
+            <span className="rounded-md border border-white/30 px-1.5 py-0.5 text-[10px] leading-4">
               {current.OfficialRating}
             </span>
           )}
@@ -134,13 +146,13 @@ export default function HeroCarousel({
         </div>
 
         {current.Overview && (
-          <p className="hidden line-clamp-2 max-w-2xl text-sm text-white/80 sm:[display:-webkit-box]">{current.Overview}</p>
+          <p className="hidden line-clamp-2 max-w-2xl text-[12px] leading-relaxed text-white/85 sm:[display:-webkit-box]">{current.Overview}</p>
         )}
-      </div>
+      </LiquidGlass>
 
       {/* Dot indicators */}
       {count > 1 && (
-        <div className="absolute inset-x-0 bottom-3 flex items-center justify-center gap-1.5">
+        <div className="glass-surface glass-dark absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center justify-center gap-0.5 rounded-full px-2">
           {dotIndexes.map(i => (
             <button
               key={items[i].Id}
@@ -149,10 +161,11 @@ export default function HeroCarousel({
                 e.stopPropagation();
                 setIndex(i);
               }}
-              className={`h-1.5 rounded-full transition-all ${
-                i === safeIndex ? 'w-5 bg-white' : 'w-1.5 bg-white/40 hover:bg-white/70'
-              }`}
-            />
+              aria-current={i === safeIndex ? 'true' : undefined}
+              className="flex h-6 w-6 items-center justify-center rounded-full"
+            >
+              <span className={`h-1.5 rounded-full transition-all ${i === safeIndex ? 'w-5 bg-white' : 'w-1.5 bg-white/45'}`} />
+            </button>
           ))}
         </div>
       )}

@@ -1,10 +1,10 @@
 # MyJellyfinClient
 
-一个 SenPlayer 风格的 Jellyfin / Emby Windows 客户端。使用 **Tauri 2 + React 18 + TypeScript + Tailwind CSS** 构建。
+一个受 Apple Liquid Glass 风格启发的 Jellyfin / Emby Windows 客户端。使用 **Tauri 2 + React 18 + TypeScript + Tailwind CSS** 构建。
 
 ## 功能
 
-- 🖥️ SenPlayer 风格界面：左侧导航（文件 / 服务器 / IPTV / 记录 / 搜索 / 设置）、圆角卡片、浅色主题、背景图渐变沉浸页
+- 🖥️ 液态玻璃界面：浮动侧栏、药丸工具栏与半透明面板，圆角边缘折射、轻微 RGB 色散和高光；浅色主题与背景图沉浸详情页，窄窗口自动使用图标导航
 - 🎬 服务器主页：背景图轮播 Hero、我的媒体、继续观看、接下来、最新内容
 - 📚 媒体库浏览：排序、分页加载
 - 🎞️ 详情页：Logo 标题、演职人员、季/集列表、类似作品、收藏/已看标记
@@ -30,7 +30,11 @@
 
 播放器标题使用媒体元数据；原生控制栏和菜单采用半透明玻璃背景，包含实时背景模糊、边缘折射及轻微色散，配合白色图标及悬浮文字提示，默认静止 3 秒后隐藏。窗口在视频尺寸可用时按完整视频的显示比例自适应，保留视频内的黑边，不自动裁切。Alt+Tab 返回应用后可直接使用空格、回车。截图保存清晰视频画面；优先使用系统图片目录的 `MyJellyfinClient` 文件夹，不可写时使用应用本地数据目录；开发版使用开发数据目录下的 `screenshots`，保存成功会显示实际路径。
 
-mpv 二进制（约 120MB，不提交 Git）需放置在 `src-tauri/resources/mpv/`。从 [mpv-winbuild-cmake](https://github.com/shinchiro/mpv-winbuild-cmake/releases) 下载 x86_64 构建，将 `mpv.exe`、`mpv.com` 和包内随附 DLL 放入该目录，保留仓库自带的 `portable_config/scripts/mjc-osc.lua` 和 `portable_config/shaders/mjc-glass.glsl`。
+mpv 二进制（解压后约 120MB，不提交 Git）放置在 `src-tauri/resources/mpv/`。开发与打包脚本在 EXE、COM 或 DLL 缺失或为空时，会自动从 [mpv-winbuild-cmake](https://github.com/shinchiro/mpv-winbuild-cmake/releases) 的最新 Release 下载普通 x86_64 构建，校验包大小和 SHA-256，再使用 Windows 自带的 `tar.exe` 解压并安装完整的同版本二进制。已有完整资源时直接使用，不联网或自动升级。仅安装 `mpv.exe`、`mpv.com` 和全部随附 DLL，保留仓库中的 `portable_config/scripts/mjc-osc.lua` 和 `portable_config/shaders/mjc-glass.glsl`。
+
+也可单独运行 `./scripts/ensure-mpv.ps1` 准备播放器。自动下载需要访问 GitHub，以及 Windows 自带的 `curl.exe` 和 `tar.exe`；下载或校验失败会停止后续启动/打包，并给出重试与手动准备提示。下载与解压临时文件位于 `.tmp/`，完成或失败后清理，不接触 `.local/` 开发数据。离线时可以手动下载 x86_64 包并将同一套二进制放入上述目录。
+
+如果本机已有可信的 MyJellyfinClient 安装版，也可从安装目录的 `mpv/` 复制同一套 `mpv.exe`、`mpv.com` 和全部 DLL 到上述开发目录，仅复制这些二进制，保留仓库中的控制脚本和 shader。开发与打包脚本会先检查运行资源；出现 `Required runtime files are missing or empty` 时按提示补齐文件。如果直接运行 Cargo 或 Tauri 时出现 `glob pattern resources/mpv/*.exe path not found`，同样表示缺少本地 mpv 文件。
 
 ## 开发
 
@@ -50,6 +54,8 @@ scripts\build-tauri.ps1  # 产出 NSIS 安装包 (src-tauri/target/release/bundl
 
 开发脚本使用全局 Cargo，不再携带工作区 Rust 工具链。开发账号和设置保存在 `.local/webview2/`（不提交 Git）；安装版使用系统应用数据目录。`node_modules/`、`dist/`、`src-tauri/target/` 和 TypeScript 增量缓存均可重新生成。mpv 二进制保留在 `src-tauri/resources/mpv/`，控制脚本 `portable_config/scripts/mjc-osc.lua` 属于应用源码。
 
+Vite 不监听 `.local/`，避免 WebView2 锁定 Cookie 等数据文件时出现 `EBUSY`。这类监听错误应检查排除规则，不要删除账号和设置数据。
+
 构建脚本先处理 mpv 运行资源签名，再由 Tauri 在打包过程中签名应用程序、卸载程序和安装包。签名只使用已有的本机开发证书，未找到时跳过；不会自动安装证书。开发证书不等同于公开受信任的商业代码签名证书。
 
 ## 验证
@@ -59,6 +65,7 @@ npm run build
 npm run test:servers
 npm run test:playback
 npm run test:settings
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/test-mpv-setup.ps1
 cargo test --manifest-path src-tauri/Cargo.toml --lib
 & ./src-tauri/resources/mpv/mpv.com --no-config --vo=null --idle=yes --script=scripts/test-player-osc.lua
 ```

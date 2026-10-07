@@ -8,7 +8,7 @@ import {
   windowToggleMaximize,
   windowIsFullscreen,
 } from '../platform/window';
-import { IconClose, IconMaximize, IconMinimize } from './icons';
+import { IconClose, IconMaximize, IconMinimize, IconPlay } from './icons';
 import { PLAYER_EXIT_EVENT } from '../player/exitPlayback';
 import { usePlaybackTitle } from '../player/playbackTitle';
 
@@ -57,22 +57,25 @@ export default function TitleBar({ dark }: { dark?: boolean }) {
     <div
       data-tauri-drag-region
       className={`drag-region relative z-30 flex h-9 shrink-0 select-none items-center justify-between ${
-        dark ? 'bg-black' : 'bg-sidebar-bg'
+        dark ? 'bg-black' : 'app-titlebar'
       }`}
     >
-      {!isPlayer && <div className="flex-1 self-stretch" data-tauri-drag-region />}
+      {!isPlayer && <div className="flex min-w-0 flex-1 items-center gap-2 self-stretch px-5 text-[11px] font-medium tracking-wide text-text-secondary" data-tauri-drag-region>
+        <span className="pointer-events-none flex items-center gap-2"><IconPlay size={12} className="text-accent" /> MyJellyfin</span>
+      </div>}
 
       {isPlayer && <div data-tauri-drag-region className="min-w-0 flex-1 truncate self-stretch px-5 text-xs leading-9 text-white/70" title={title}>
         <span className="pointer-events-none">{title || '播放器'}</span>
       </div>}
       <div className="no-drag flex items-center" onDoubleClick={e => e.stopPropagation()}>
-        <button className={ctrlBtn} onClick={windowMinimize} title="最小化">
+        <button className={ctrlBtn} onClick={windowMinimize} title="最小化" aria-label="最小化">
           <IconMinimize size={14} />
         </button>
         <button
           className={ctrlBtn}
           onClick={windowToggleMaximize}
           title={maximized ? '还原' : '最大化'}
+          aria-label={maximized ? '还原' : '最大化'}
         >
           <IconMaximize size={13} />
         </button>
@@ -82,6 +85,7 @@ export default function TitleBar({ dark }: { dark?: boolean }) {
           }`}
           onClick={close}
           title={isPlayer ? '关闭播放器' : '关闭'}
+          aria-label={isPlayer ? '关闭播放器' : '关闭'}
         >
           <IconClose size={14} />
         </button>

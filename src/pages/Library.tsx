@@ -5,6 +5,7 @@ import { useServers } from '../store/servers';
 import { useSettings } from '../store/settings';
 import { mediaFolderDate, mediaSortParams, orderMediaItems } from '../utils/listPresentation';
 import PosterCard from '../components/PosterCard';
+import LiquidGlass from '../components/LiquidGlass';
 import { EmptyState, ErrorState, Spinner } from '../components/Feedback';
 import { IconChevronLeft, IconServer } from '../components/icons';
 
@@ -144,7 +145,7 @@ export default function LibraryPage() {
       >
         <button
           onClick={() => navigate('/servers')}
-          className="mt-1 rounded-lg bg-accent px-4 py-2 text-[13px] font-medium text-white transition hover:opacity-90"
+          className="glass-button-primary mt-1 px-5 py-2.5 text-[13px] font-medium"
         >
           前往服务器
         </button>
@@ -164,33 +165,35 @@ export default function LibraryPage() {
   const folderDate = showFolderTime && view ? mediaFolderDate(view) : '';
 
   return (
-    <div className="h-full overflow-y-auto px-8 pb-10">
+    <div className="h-full overflow-y-auto px-5 pb-10 lg:px-8">
       {/* Header */}
-      <div className="flex h-12 items-center justify-between gap-3">
+      <LiquidGlass intensity="subtle" className="sticky top-4 z-20 my-4 flex min-h-16 flex-wrap items-center justify-between gap-3 rounded-[24px] px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
           <button
             onClick={() => navigate(-1)}
-            className="rounded-full p-1.5 text-gray-400 transition hover:bg-black/5 hover:text-gray-600"
+            aria-label="返回"
+            className="glass-icon-button h-9 w-9 text-text-secondary"
           >
             <IconChevronLeft size={18} />
           </button>
-          <h1 className="truncate text-[15px] font-semibold text-text-primary">
+          <h1 className="min-w-0 truncate text-[20px] font-semibold tracking-tight text-text-primary">
             {view?.Name ?? '媒体库'}{showCount && !loading ? `（${total}）` : ''}
           </h1>
-          {folderDate && <span className="text-[12px] text-gray-400">{folderDate}</span>}
+          {folderDate && <span className="hidden text-[11px] text-text-secondary sm:inline">{folderDate}</span>}
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
           {isMixed && (
-            <div className="flex rounded-lg bg-gray-100 p-0.5">
+            <div className="glass-surface flex rounded-full p-1">
               {FILTER_OPTIONS.map((o) => (
                 <button
                   key={o.key}
                   onClick={() => setTypeFilter(o.key)}
-                  className={`rounded-md px-2.5 py-1 text-[12px] transition ${
+                  aria-pressed={typeFilter === o.key}
+                  className={`rounded-full px-3 py-1.5 text-[12px] transition ${
                     typeFilter === o.key
-                      ? 'bg-white text-text-primary shadow-sm'
-                      : 'text-gray-400 hover:text-gray-600'
+                      ? 'bg-white/85 text-accent shadow-sm'
+                      : 'text-text-secondary hover:text-text-primary'
                   }`}
                 >
                   {o.label}
@@ -200,8 +203,9 @@ export default function LibraryPage() {
           )}
           <select
             value={sortKey}
+            aria-label="排序方式"
             onChange={(e) => setSortKey(e.target.value as SortKey)}
-            className="rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-[12px] text-text-primary outline-none transition focus:border-accent"
+            className="glass-input px-3 py-2 text-[12px] text-text-primary"
           >
             {SORT_OPTIONS.map((o) => (
               <option key={o.key} value={o.key}>
@@ -210,7 +214,7 @@ export default function LibraryPage() {
             ))}
           </select>
         </div>
-      </div>
+      </LiquidGlass>
 
       {/* Body */}
       {loading ? (
@@ -221,7 +225,7 @@ export default function LibraryPage() {
         <EmptyState title="此媒体库为空" hint="该媒体库中还没有可显示的内容" />
       ) : (
         <>
-          <div className="mt-2 flex flex-wrap gap-4">
+          <div className="mt-6 flex flex-wrap gap-x-5 gap-y-6">
             {displayedItems.map((item) => (
               <PosterCard
                 key={item.Id}
@@ -238,7 +242,7 @@ export default function LibraryPage() {
               <button
                 onClick={loadMore}
                 disabled={loadingMore}
-                className="flex h-9 min-w-[120px] items-center justify-center rounded-lg bg-white px-5 text-[13px] text-text-primary shadow-card transition hover:shadow-card-hover disabled:opacity-60"
+                className="glass-button flex min-h-11 min-w-[140px] items-center justify-center px-5 text-[13px] text-text-primary disabled:opacity-60"
               >
                 {loadingMore ? (
                   <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-accent" />

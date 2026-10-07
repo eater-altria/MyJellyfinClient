@@ -9,6 +9,8 @@ export default defineConfig({
     strictPort: true,
     watch: {
       ignored: [
+        // WebView2 owns these persistent files and can hold exclusive locks.
+        '**/.local/**',
         '**/.tmp/**',
         '**/.toolchain/**',
         '**/.npm-cache/**',

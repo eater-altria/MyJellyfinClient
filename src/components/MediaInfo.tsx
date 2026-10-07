@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { BaseItem, MediaStream, formatDuration, formatSize } from '../api/mediaServer';
 import SectionRow from './SectionRow';
+import LiquidGlass from './LiquidGlass';
 
 const yesNo = (value?: boolean) => value === undefined ? undefined : value ? '是' : '否';
 const bitrate = (value?: number) => value ? `${Math.round(value / 1000)} kbps` : undefined;
@@ -22,15 +23,15 @@ function StreamCard({ stream }: { stream: MediaStream }) {
     ['强制', stream.Type === 'Subtitle' ? yesNo(stream.IsForced) : undefined],
   ];
   return (
-    <article className="w-[250px] shrink-0 rounded-2xl bg-white/70 p-5 shadow-card backdrop-blur">
+    <article className="glass-surface media-stream-glass w-[260px] shrink-0 rounded-[24px] p-5">
       <h3 className="mb-3 flex items-center gap-2 text-[14px] font-semibold">
         {type}{stream.Index != null && <span className="text-xs font-normal text-gray-400">#{stream.Index}</span>}
-        {stream.IsDefault && <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">默认</span>}
+        {stream.IsDefault && <span className="glass-badge text-[10px] text-accent">默认</span>}
       </h3>
       <dl className="space-y-2 text-[12px]">
         {fields.filter(([, value]) => value !== undefined && value !== '').map(([label, value]) => (
-          <div key={label} className="grid grid-cols-[64px_1fr] gap-2">
-            <dt className="text-gray-500">{label}</dt><dd className="break-words text-text-primary">{value}</dd>
+          <div key={label} className="grid grid-cols-[64px_minmax(0,1fr)] gap-2">
+            <dt className="text-text-secondary">{label}</dt><dd className="min-w-0 [overflow-wrap:anywhere] text-text-primary">{value}</dd>
           </div>
         ))}
       </dl>
@@ -47,23 +48,25 @@ export default function MediaInfo({ item, serverName }: { item: BaseItem; server
   const path = source.Path ?? item.Path;
   const filename = path?.split(/[\\/]/).pop();
   return (
-    <section className="mt-7">
-      {sources.length > 1 && <div className="mb-3 flex items-center gap-2 text-[13px]">
-        <span>文件版本</span><select className="max-w-lg rounded-lg bg-white px-3 py-2" value={sourceIndex} onChange={(e) => setSourceIndex(Number(e.target.value))}>
+    <section className="mt-7" aria-label="媒体信息">
+      <LiquidGlass intensity="prominent" className="media-info-panel">
+      {sources.length > 1 && <div className="mb-3 flex flex-wrap items-center gap-3 text-[13px]">
+        <label htmlFor="media-source-version" className="text-text-secondary">文件版本</label><select id="media-source-version" className="glass-input min-w-0 max-w-full px-4 py-2 sm:max-w-lg" value={sourceIndex} onChange={(e) => setSourceIndex(Number(e.target.value))}>
           {sources.map((s, i) => <option key={s.Id} value={i}>{s.Name ?? `版本 ${i + 1}`}</option>)}
         </select>
       </div>}
       <SectionRow title="媒体信息">
         {streams.map((stream, i) => <StreamCard key={`${source.Id}-${stream.Index ?? i}`} stream={stream} />)}
       </SectionRow>
-      <div className="mt-3 rounded-2xl bg-white/70 px-5 py-4 text-center text-[12px] shadow-card backdrop-blur">
+      <div className="glass-surface media-file-glass mt-4 rounded-[24px] px-5 py-5 text-[12px]">
         <div className="break-all font-medium">{filename ?? source.Name ?? item.Name}</div>
-        <div className="mt-1 flex flex-wrap justify-center gap-x-3 gap-y-1 text-gray-500">
+        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-text-secondary">
           {[serverName, source.Container?.toUpperCase(), formatSize(source.Size),
             formatDuration(source.RunTimeTicks ?? item.RunTimeTicks), bitrate(source.Bitrate)].filter(Boolean).map((value, i) => <span key={i}>{value}</span>)}
         </div>
-        {path && <div className="mt-2 break-all text-[11px] text-gray-400">{path}</div>}
+        {path && <div className="mt-2 break-all text-[11px] text-text-secondary">{path}</div>}
       </div>
+      </LiquidGlass>
     </section>
   );
 }

@@ -1,7 +1,7 @@
 {
   "name": "my-jellyfin-client",
-  "version": "0.2.1",
-  "description": "A Jellyfin / Emby Windows client with SenPlayer-style UI",
+  "version": "0.3.0",
+  "description": "A Jellyfin / Emby Windows client with a Liquid Glass inspired UI",
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
@@ -12,7 +12,8 @@
     "test:servers": "node scripts/test-media-servers.cjs",
     "test:playback": "node scripts/test-playback-cancel.cjs && node scripts/test-browser-player.cjs",
     "test:home": "node scripts/test-home-libraries.cjs",
-    "test:settings": "node scripts/test-list-settings.cjs && node scripts/test-playback-preferences.cjs && node scripts/test-browser-settings.cjs"
+    "test:settings": "node scripts/test-list-settings.cjs && node scripts/test-playback-preferences.cjs && node scripts/test-browser-settings.cjs",
+    "test:ui": "node scripts/test-liquid-glass.cjs && node scripts/test-glass-buttons.cjs && node scripts/test-app-backdrop.cjs && node scripts/test-utility-pages.cjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.1.1",

@@ -59,12 +59,12 @@ export default function PosterCard({
   return (
     <button
       onClick={onClick}
-      className="group shrink-0 text-left"
+      className="media-card group shrink-0 rounded-[20px] text-left"
       style={{ width: w }}
       title={item.Name}
     >
       <div
-        className="relative overflow-hidden rounded-xl bg-gray-200 shadow-card transition-shadow group-hover:shadow-card-hover"
+        className="relative overflow-hidden rounded-[18px] bg-white/40 shadow-card ring-1 ring-white/65 transition-shadow group-hover:shadow-card-hover"
         style={{ width: w, height: h }}
       >
         {img ? (
@@ -77,49 +77,49 @@ export default function PosterCard({
             draggable={false}
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-indigo-200 to-purple-200 text-2xl font-bold text-white/80">
+          <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-sky-100 via-white/60 to-indigo-100 text-3xl font-medium text-slate-400">
             {item.Name?.slice(0, 1)}
           </div>
         )}
 
         {landscape && pct == null && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition group-hover:bg-black/25 group-hover:opacity-100">
-            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white/90 text-gray-800">
+          <div className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition group-hover:bg-black/20 group-hover:opacity-100 group-focus-visible:bg-black/20 group-focus-visible:opacity-100">
+            <span className="glass-surface flex h-11 w-11 items-center justify-center rounded-full text-text-primary">
               <IconPlay size={16} />
             </span>
           </div>
         )}
 
         {landscape && remainingSec != null && remainingSec > 0 && (
-          <span className="absolute bottom-1.5 right-1.5 rounded-md bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+          <span className="glass-badge glass-dark absolute bottom-2 right-2 text-[10px] text-white">
             剩余 {formatTime(remainingSec)}
           </span>
         )}
 
         {settings.showPlayProgress && pct != null && pct > 0 && (
-          <div className="absolute inset-x-0 bottom-0 h-[3px] bg-black/25">
+          <div className="absolute inset-x-0 bottom-0 h-1 bg-black/20">
             <div className="h-full bg-accent" style={{ width: `${Math.min(100, pct)}%` }} />
           </div>
         )}
 
         {settings.showNewBadge && isNewMedia(item) && (
-          <span title="最近 7 天添加且未播放" className="absolute left-1.5 top-1.5 rounded bg-accent px-1.5 py-0.5 text-[10px] font-semibold text-white">New</span>
+          <span title="最近 7 天添加且未播放" className="glass-badge absolute left-2 top-2 bg-accent text-[10px] font-semibold text-white">New</span>
         )}
 
-        {hdr && <span className="absolute bottom-1.5 left-1.5 rounded bg-black/65 px-1.5 py-0.5 text-[10px] text-white">{hdr}</span>}
+        {hdr && <span className="glass-badge glass-dark absolute bottom-2 left-2 text-[10px] text-white">{hdr}</span>}
 
         {showRating && item.CommunityRating != null && item.CommunityRating > 0 && !item.UserData?.Played && (
-          <span className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1 py-0.5 text-[10px] text-white">★{item.CommunityRating.toFixed(1)}</span>
+          <span className="glass-badge glass-dark absolute right-2 top-2 text-[10px] text-white">★{item.CommunityRating.toFixed(1)}</span>
         )}
 
         {item.UserData?.Played && (
-          <span className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-accent p-1 text-white">
+          <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-accent p-1 text-white shadow-sm ring-1 ring-white/50">
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round"><path d="m4 12.5 5 5L20 6.5" /></svg>
           </span>
         )}
       </div>
-      <div className="mt-1.5 px-0.5">
-        <div className="truncate text-[12px] font-medium text-text-primary">{label ?? item.Name}</div>
+      <div className="mt-2.5 px-1">
+        <div className="truncate text-[12px] font-semibold text-text-primary">{label ?? item.Name}</div>
         {subtitle && <div className="truncate text-[11px] text-text-secondary">{subtitle}</div>}
         {metadata.length > 0 && <div className="mt-0.5 flex flex-wrap gap-x-1.5 gap-y-0.5 text-[10px] text-text-secondary">{metadata.map((value) => <span key={value}>{value}</span>)}</div>}
         {description && <div className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-text-secondary">{description}</div>}

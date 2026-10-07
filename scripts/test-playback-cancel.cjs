@@ -70,10 +70,12 @@ function mount(protocol, pending) {
     '../player/playbackPreferences': { getPlaybackPreferences: () => ({}), rememberTrack: () => {},
       saveSubtitleSearchQueries: () => {}, getAdjacentMedia: async () => undefined },
     '../player/playbackTitle': { mediaTitle, usePlaybackTitle },
+    '../components/LiquidGlass': { default: function LiquidGlass() {} },
+    '../player/liquid-glass.css': {},
     '../player/exitPlayback': { PLAYER_EXIT_EVENT: 'mjc:exit-playback' },
     '../platform/window': { isTauri: false, windowClose: () => calls.push(['window-close']), windowIsMaximized: async () => false,
       windowIsFullscreen: async () => false, windowMinimize() {}, windowToggleMaximize() {} },
-    './icons': { IconClose() {}, IconMaximize() {}, IconMinimize() {} },
+    './icons': { IconClose() {}, IconMaximize() {}, IconMinimize() {}, IconPlay() {} },
   };
   const bundle = { exports: {} };
   new Function('require', 'module', 'exports', 'window', code)(name => {

@@ -29,6 +29,8 @@ const modules = {
   '../store/servers': { useServers: { getState: () => ({ getApi: () => null }) } },
   '../store/settings': { useSettings },
   '../components/icons': new Proxy({}, { get: () => function Icon() {} }),
+  '../components/LiquidGlass': { default: function LiquidGlass() {} },
+  '../player/liquid-glass.css': {},
   '../platform/window': { isTauri: false },
   '../player/browserKeyboard': { bindBrowserPlaybackKeys: (_target, _video, _settings, value) => { actions = value; return () => {}; } },
   '../player/playbackPreferences': {}, '../player/trackSelection': {},

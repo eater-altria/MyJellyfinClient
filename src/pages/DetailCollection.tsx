@@ -6,6 +6,7 @@ import { useSettings } from '../store/settings';
 import { orderMediaItems } from '../utils/listPresentation';
 import CastRow from '../components/CastRow';
 import PosterCard from '../components/PosterCard';
+import LiquidGlass from '../components/LiquidGlass';
 import { EmptyState, ErrorState, Spinner } from '../components/Feedback';
 import { IconChevronLeft } from '../components/icons';
 
@@ -80,21 +81,21 @@ export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 
   };
 
   return (
-    <div className="h-full overflow-y-auto px-8 pb-10">
-      <div className="flex min-h-12 items-center gap-2">
-        <button onClick={() => navigate(-1)} title="返回" className="rounded-full p-1.5 hover:bg-black/5">
+    <div className="h-full overflow-y-auto px-5 pb-10 lg:px-8">
+      <LiquidGlass intensity="subtle" className="sticky top-4 z-20 my-4 flex min-h-16 items-center gap-3 rounded-[24px] px-4 py-3">
+        <button onClick={() => navigate(-1)} title="返回" aria-label="返回" className="glass-icon-button h-9 w-9 shrink-0">
           <IconChevronLeft size={18} />
         </button>
-        <h1 className="text-[15px] font-semibold">{source?.Name ? `${source.Name} · ` : ''}{title}{showCount && !loading ? `（${total}）` : ''}</h1>
-      </div>
+        <h1 className="min-w-0 break-words text-[20px] font-semibold tracking-tight">{source?.Name ? `${source.Name} · ` : ''}{title}{showCount && !loading ? `（${total}）` : ''}</h1>
+      </LiquidGlass>
       {loading ? <Spinner label="正在加载…" /> : error ? (
         <ErrorState message={error} onRetry={() => setRetry((n) => n + 1)} />
       ) : api && source ? (
         <>
           {kind === 'person' && (
-            <div className="my-5 flex items-start gap-5">
-              {api.posterUrl(source, 300) && <img src={api.posterUrl(source, 300)!} alt={source.Name} className="h-40 w-28 rounded-xl object-cover" />}
-              <div><h2 className="text-2xl font-semibold">{source.Name}</h2>
+            <div className="glass-surface my-6 flex flex-wrap items-start gap-5 rounded-[28px] p-6">
+              {api.posterUrl(source, 300) && <img src={api.posterUrl(source, 300)!} alt={source.Name} className="h-40 w-28 rounded-[20px] object-cover shadow-card ring-1 ring-white/80" />}
+              <div className="min-w-0 flex-1"><h2 className="text-2xl font-semibold tracking-tight">{source.Name}</h2>
                 {source.Overview && <p className="mt-3 max-w-3xl whitespace-pre-line text-[13px] leading-relaxed text-gray-600">{source.Overview}</p>}
               </div>
             </div>
@@ -102,7 +103,7 @@ export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 
           {kind === 'cast' ? (
             <CastRow api={api} people={source.People ?? []} grid onPersonClick={(person) => navigate(`/server/${serverId}/person/${person.Id}`)} />
           ) : items.length ? (
-            <div className="mt-4 flex flex-wrap gap-4">
+            <div className="mt-6 flex flex-wrap gap-x-5 gap-y-6">
               {orderMediaItems(items, foldersFirst).map((item) => <PosterCard key={item.Id} api={api} item={item} onClick={() => openItem(item)} />)}
             </div>
           ) : <EmptyState title="暂无作品" hint="服务器媒体库中暂无可显示的作品。" />}
@@ -110,7 +111,7 @@ export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 
             <div className="mt-6 text-center">
               {moreError && <p className="mb-2 text-sm text-red-500">{moreError}</p>}
               <button disabled={loadingMore} onClick={() => { setMoreError(''); setLoadingMore(true); }}
-                className="rounded-lg bg-white px-5 py-2 text-sm shadow-card disabled:opacity-50">
+                className="glass-button px-5 py-2.5 text-sm disabled:opacity-50">
                 {loadingMore ? '正在加载…' : `加载更多（剩余 ${total - items.length}）`}
               </button>
             </div>

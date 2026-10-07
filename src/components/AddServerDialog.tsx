@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useServers, type SavedServer } from '../store/servers';
 import { ApiError, serverProtocolName, type ServerProtocol } from '../api/mediaServer';
 import { IconClose, IconJellyfin, IconEmby } from './icons';
 import { ServerDetectionError } from '../api/detectServer';
+import LiquidGlass from './LiquidGlass';
 
 function errorMessage(e: unknown): string {
   if (e instanceof ServerDetectionError) return e.message;
@@ -14,7 +15,7 @@ function errorMessage(e: unknown): string {
   return '无法连接服务器，请检查地址和网络';
 }
 
-/** Modal dialog for adding or editing a Jellyfin / Emby server (SenPlayer style). */
+/** Modal dialog for adding or editing a Jellyfin / Emby server. */
 export default function AddServerDialog({ onClose, server }: { onClose: () => void; server?: SavedServer }) {
   const addServer = useServers((s) => s.addServer);
   const updateServer = useServers((s) => s.updateServer);
@@ -25,6 +26,37 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('');
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const formId = useId();
+  const [previousFocus] = useState(() => document.activeElement instanceof HTMLElement ? document.activeElement : null);
+
+  useEffect(() => {
+    dialogRef.current?.querySelector<HTMLInputElement>('input')?.focus();
+    return () => previousFocus?.focus();
+  }, [previousFocus]);
+
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !loading) {
+        event.preventDefault();
+        onClose();
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)');
+      if (!focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [loading, onClose]);
 
   const canSubmit = address.trim() !== '' && username.trim() !== '' && !loading;
 
@@ -45,45 +77,56 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
   };
 
   const inputCls =
-    'w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-[13px] text-text-primary outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20';
+    'glass-input w-full rounded-2xl px-4 py-3 text-[13px] text-text-primary';
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm"
+      ref={dialogRef}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/20 p-4 backdrop-blur-md"
       onClick={() => { if (!loading) onClose(); }}
     >
-      <div
-        className="w-[360px] rounded-2xl bg-white p-6 shadow-card-hover"
+      <LiquidGlass
+        intensity="regular"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`${formId}-title`}
+        className="w-full max-w-[420px] overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-5 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            {server?.protocol === 'emby' ? <IconEmby size={22} /> : <IconJellyfin size={22} />}
-            <h2 className="text-[16px] font-semibold text-text-primary">{server ? '编辑服务器' : '添加服务器'}</h2>
+        <div className="max-h-[calc(100dvh-32px)] overflow-y-auto p-7">
+        <div className="mb-6 flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            {server?.protocol === 'emby' ? <IconEmby size={36} /> : <IconJellyfin size={36} />}
+            <div className="min-w-0">
+              <h2 id={`${formId}-title`} className="text-[20px] font-semibold tracking-tight text-text-primary">{server ? '编辑服务器' : '添加服务器'}</h2>
+              <p className="mt-1 text-[12px] text-text-secondary">连接你的 Jellyfin 或 Emby 媒体库</p>
+            </div>
           </div>
           <button
             onClick={onClose}
             disabled={loading}
-            className="rounded-full p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
+            aria-label="关闭"
+            className="glass-icon-button shrink-0 p-2 text-text-secondary"
           >
             <IconClose size={16} />
           </button>
         </div>
 
         <form
-          className="flex flex-col gap-3"
+          className="flex flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
             submit();
           }}
         >
           <div>
-            <label className="mb-1 block text-[12px] text-text-secondary">服务器名称</label>
-            <input className={inputCls} placeholder="自定义显示名称（可留空）" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+            <label htmlFor={`${formId}-name`} className="mb-1.5 block px-1 text-[12px] font-medium text-text-secondary">服务器名称</label>
+            <input id={`${formId}-name`} className={inputCls} placeholder="自定义显示名称（可留空）" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
           </div>
           <div>
-            <label className="mb-1 block text-[12px] text-text-secondary">服务器地址</label>
+            <label htmlFor={`${formId}-address`} className="mb-1.5 block px-1 text-[12px] font-medium text-text-secondary">服务器地址</label>
             <input
+              id={`${formId}-address`}
               className={inputCls}
               placeholder="http://192.168.1.10:8096"
               value={address}
@@ -91,8 +134,10 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
             />
           </div>
           <div>
-            <label className="mb-1 block text-[12px] text-text-secondary">用户名</label>
+            <label htmlFor={`${formId}-username`} className="mb-1.5 block px-1 text-[12px] font-medium text-text-secondary">用户名</label>
             <input
+              id={`${formId}-username`}
+              autoComplete="username"
               className={inputCls}
               placeholder="服务器用户名"
               value={username}
@@ -100,8 +145,10 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
             />
           </div>
           <div>
-            <label className="mb-1 block text-[12px] text-text-secondary">密码</label>
+            <label htmlFor={`${formId}-password`} className="mb-1.5 block px-1 text-[12px] font-medium text-text-secondary">密码</label>
             <input
+              id={`${formId}-password`}
+              autoComplete="current-password"
               className={inputCls}
               type="password"
               placeholder={server ? '留空保留登录；更换地址或用户需重新认证' : '密码（可留空）'}
@@ -110,16 +157,16 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
             />
           </div>
 
-          <p className="text-[11px] text-gray-400" role="status">{loading ? connectionStatus : '自动识别 Jellyfin / Emby，无需选择服务器类型'}</p>
+          <p className="px-1 text-[12px] leading-relaxed text-text-secondary" role="status">{loading ? connectionStatus : '自动识别 Jellyfin / Emby，无需选择服务器类型'}</p>
 
           {error && (
-            <div className="rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-500">{error}</div>
+            <div role="alert" className="rounded-2xl bg-red-500/10 px-4 py-3 text-[12px] text-red-600">{error}</div>
           )}
 
           <button
             type="submit"
             disabled={!canSubmit}
-            className="mt-1 flex h-9 items-center justify-center rounded-lg bg-accent text-[13px] font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="glass-button-primary mt-1 flex h-11 items-center justify-center text-[13px] font-medium"
           >
             {loading ? (
               <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
@@ -128,7 +175,8 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
             )}
           </button>
         </form>
-      </div>
+        </div>
+      </LiquidGlass>
     </div>
   );
 }

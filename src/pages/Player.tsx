@@ -26,6 +26,8 @@ import { getAdjacentMedia, getPlaybackPreferences, rememberTrack, saveSubtitleSe
 import { preferredTrack } from '../player/trackSelection';
 import { PLAYER_EXIT_EVENT } from '../player/exitPlayback';
 import { mediaTitle, usePlaybackTitle } from '../player/playbackTitle';
+import LiquidGlass from '../components/LiquidGlass';
+import '../player/liquid-glass.css';
 
 const DIRECT_PLAY_CONTAINERS = ['mp4', 'm4v', 'mkv', 'mov', 'webm'];
 
@@ -131,7 +133,7 @@ function SeekBar({
       </div>
       {hoverT != null && !disabled && duration > 0 && (
         <div
-          className="pointer-events-none absolute -top-8 -translate-x-1/2 rounded-lg border border-white/15 bg-black/50 px-2 py-1 backdrop-blur-md text-[11px] tabular-nums text-white"
+          className="player-seek-tooltip pointer-events-none absolute -top-9 -translate-x-1/2 px-3 py-1.5 text-[11px] tabular-nums text-white"
           style={{ left: `${hoverX}%` }}
         >
           {formatTime(hoverT)}
@@ -719,36 +721,45 @@ export default function PlayerPage() {
         {subTracks.filter(t => t.url).map(t => <track key={t.id} kind="subtitles" src={t.url} label={t.title} srcLang={t.lang} />)}
       </video>
 
-      {controlsVisible && <div className="player-side-tools" onClick={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}>
+      {controlsVisible && <LiquidGlass tone="dark" intensity="subtle" className="player-side-tools" onClick={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}>
         {settings.showScreenshotButton && <button onClick={captureScreenshot} className="player-control-button" aria-label="截图" data-tooltip="截图"><IconCamera size={20} /></button>}
         <button onClick={() => { showControlsMenu(!controlsMenu); poke(); }} className="player-control-button" aria-label="播放设置" data-tooltip="播放设置"><IconList size={20} /></button>
+      </LiquidGlass>}
+      {notice && <div className="pointer-events-none absolute inset-x-0 top-20 z-30 flex justify-center px-5">
+        <LiquidGlass tone="dark" intensity="subtle" className="player-notice text-center text-sm text-white" role="status">{notice}</LiquidGlass>
       </div>}
-      {notice && <div className="pointer-events-none absolute inset-x-0 top-20 z-30 text-center text-sm text-white">{notice}</div>}
 
       {/* Loading / buffering spinner */}
       {(loading || buffering) && !error && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <div className="h-12 w-12 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
+          <LiquidGlass tone="dark" className="player-status-card">
+            <div className="h-9 w-9 animate-spin rounded-full border-[3px] border-white/20 border-t-white" />
+            <div className="text-[13px] text-white/80" role="status">{loading ? '正在加载视频…' : '正在缓冲…'}</div>
+          </LiquidGlass>
         </div>
       )}
 
       {/* Error overlay */}
       {error && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-black/90">
-          <div className="text-[16px] font-medium text-white">播放失败</div>
-          <div className="max-w-md px-6 text-center text-[13px] text-white/60">{error}</div>
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/75 px-6">
+          <LiquidGlass tone="dark" className="player-status-card player-error-card" role="alert">
+            <div className="text-[18px] font-medium text-white">播放失败</div>
+            <div className="max-w-md text-center text-[13px] leading-relaxed text-white/70">{error}</div>
+          </LiquidGlass>
         </div>
       )}
 
       {/* Top bar */}
       <div
-        className={`absolute inset-x-0 top-0 z-10 flex items-center gap-3 bg-gradient-to-b from-black/30 to-transparent px-5 pb-6 pt-4 transition-opacity duration-300 ${
+        className={`absolute inset-x-0 top-0 z-10 flex items-center justify-center bg-gradient-to-b from-black/20 to-transparent px-5 pb-6 pt-4 transition-opacity duration-300 ${
           controlsVisible || loading || buffering || duration === 0 ? 'opacity-100' : 'pointer-events-none opacity-0'
         }`}
         onClick={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
       >
-        <div className="min-w-0 flex-1 truncate text-center text-sm font-medium text-white drop-shadow">{title}</div>
+        {title && <LiquidGlass tone="dark" intensity="subtle" className="player-title-surface min-w-0 max-w-full">
+          <div className="truncate text-center text-sm font-medium text-white">{title}</div>
+        </LiquidGlass>}
       </div>
 
       {/* Timeline and transport share the native controller's inset surface. */}
@@ -759,8 +770,10 @@ export default function PlayerPage() {
         onClick={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
       >
-        {controlsMenu && <div className="player-controls-menu absolute bottom-[calc(100%+10px)] right-2 w-72 max-w-[calc(100%-40px)] overflow-y-auto rounded-xl border border-white/15 bg-black/50 p-4 text-sm text-white shadow-2xl backdrop-blur-xl"
-          style={{ maxHeight: 'max(80px, min(360px, calc(100vh - 220px)))' }}>
+        {controlsMenu && <LiquidGlass tone="dark" className="player-controls-menu absolute bottom-[calc(100%+10px)] right-2 w-72 max-w-[calc(100%-40px)] overflow-hidden p-4 text-sm text-white">
+          {/* Only the content scrolls; the backdrop lens stays over the whole menu. */}
+          <div className="player-menu-scroll overflow-y-auto pr-1"
+            style={{ maxHeight: 'max(46px, min(326px, calc(100vh - 254px)))' }}>
           <div className="mb-3 text-xs font-medium text-white/50">播放设置</div>
           <label className="player-menu-field">倍速
             <select aria-label="倍速" value={playbackRate} onChange={e => {
@@ -804,8 +817,9 @@ export default function PlayerPage() {
             </>}
           </div>
           {settings.showScreenshotButton && <button onClick={captureScreenshot} className="mt-2 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-xs text-white/80 hover:bg-white/10 disabled:opacity-30"><IconCamera size={16} />截图</button>}
-        </div>}
-        <div className="player-glass-panel">
+          </div>
+        </LiquidGlass>}
+        <LiquidGlass tone="dark" intensity="subtle" className="player-glass-panel">
           <div className="player-timeline flex items-center gap-4 text-sm tabular-nums">
             <span className="text-white/95">{formatTime(currentTime)}</span>
             <div className="min-w-0 flex-1"><SeekBar current={currentTime} duration={duration} buffered={buffered}
@@ -842,7 +856,7 @@ export default function PlayerPage() {
               <button onClick={() => { showControlsMenu(!controlsMenu); poke(); }} className="player-control-button" aria-label="更多" data-tooltip="更多" aria-expanded={controlsMenu}><span className="player-icon-ring"><IconMore size={14} /></span></button>
             </div>
           </div>
-        </div>
+        </LiquidGlass>
       </div>
     </div>
   );

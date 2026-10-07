@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import TitleBar from './components/TitleBar';
 import WindowResizeHandles from './components/WindowResizeHandles';
+import AppBackdrop from './components/AppBackdrop';
 import FilesPage from './pages/Files';
 import ServersPage from './pages/Servers';
 import IptvPage from './pages/Iptv';
@@ -17,7 +18,6 @@ import PlayerPage from './pages/Player';
 import NativePlayer from './pages/NativePlayer';
 import DetailCollection from './pages/DetailCollection';
 import { isTauri } from './platform/window';
-import { useServers } from './store/servers';
 import { useSettings } from './store/settings';
 import { useServerReachability } from './hooks/useServerReachability';
 
@@ -58,11 +58,12 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="app-shell flex h-full flex-col">
+      <AppBackdrop />
       <TitleBar />
-      <div className="flex min-h-0 flex-1">
+      <div className="app-workspace flex min-h-0 flex-1">
         <Sidebar />
-        <main className="min-w-0 flex-1 overflow-hidden bg-page-bg">
+        <main className="app-content min-w-0 flex-1 overflow-hidden">
           <Routes>
             <Route path="/files" element={<FilesPage />} />
             <Route path="/servers" element={<ServersPage />} />
