@@ -1,8 +1,9 @@
 /**
  * Shared Jellyfin / Emby REST API client.
  * Auth header format:
- *   X-Emby-Authorization: MediaBrowser Client="...", Device="...", DeviceId="...", Version="...", Token="..."
+ *   Authorization / X-Emby-Authorization: Emby (or MediaBrowser for Jellyfin) Client="...", ...
  */
+import { DEFAULT_CLIENT_IDENTITY, resolveClientIdentity, type ClientIdentity } from '../utils/clientIdentity';
 
 export type ServerProtocol = 'jellyfin' | 'emby';
 export const serverProtocolName = (protocol?: ServerProtocol) => protocol === 'emby' ? 'Emby' : 'Jellyfin';
@@ -157,9 +158,6 @@ export interface PlaybackInfoResult {
   ErrorCode?: string;
 }
 
-const CLIENT_NAME = 'MyJellyfinClient';
-const CLIENT_VERSION = '0.1.0';
-const DEVICE_NAME = 'Windows PC';
 const LIST_ITEM_FIELDS = 'Overview,PrimaryImageAspectRatio,DateCreated,MediaSources,MediaStreams,Chapters,ChildCount,RecursiveItemCount';
 
 function getDeviceId(): string {
@@ -184,16 +182,21 @@ export function normalizeAddress(input: string): string {
   return url.toString().replace(/\/+$/, '');
 }
 
-function authHeader(token?: string, protocol: ServerProtocol = 'jellyfin', userId?: string): string {
+function authHeader(identity: ClientIdentity, token?: string, protocol: ServerProtocol = 'jellyfin', userId?: string, deviceId = getDeviceId()): string {
   const parts = [
-    `Client="${CLIENT_NAME}"`,
-    `Device="${DEVICE_NAME}"`,
-    `DeviceId="${getDeviceId()}"`,
-    `Version="${CLIENT_VERSION}"`,
+    `Client="${encodeURIComponent(identity.name)}"`,
+    `Device="${encodeURIComponent(identity.deviceName)}"`,
+    `DeviceId="${encodeURIComponent(deviceId)}"`,
+    `Version="${encodeURIComponent(identity.version)}"`,
   ];
-  if (userId) parts.push(`UserId="${userId}"`);
-  if (token) parts.push(`Token="${token}"`);
+  if (userId) parts.push(`UserId="${encodeURIComponent(userId)}"`);
+  if (token) parts.push(`Token="${encodeURIComponent(token)}"`);
   return `${protocol === 'emby' ? 'Emby' : 'MediaBrowser'} ${parts.join(', ')}`;
+}
+
+/** Public discovery sends client metadata, never account credentials. */
+export function clientIdentityHeaders(identity: ClientIdentity = DEFAULT_CLIENT_IDENTITY): Record<string, string> {
+  return { 'X-Emby-Authorization': authHeader(identity), Accept: 'application/json' };
 }
 
 export class MediaServerApi {
@@ -202,18 +205,32 @@ export class MediaServerApi {
     public readonly token?: string,
     public readonly userId?: string,
     public readonly protocol: ServerProtocol = 'jellyfin',
+    private readonly identity: () => ClientIdentity = () => DEFAULT_CLIENT_IDENTITY,
+    private readonly deviceIdOverride?: string,
   ) {
     this.baseUrl = normalizeAddress(baseUrl);
   }
 
   private headers(): Record<string, string> {
+    const identity = this.clientIdentity();
+    const authorization = authHeader(identity, this.token, this.protocol, this.userId, this.deviceId());
     return {
-      Authorization: authHeader(this.token, this.protocol, this.userId),
-      'X-Emby-Authorization': authHeader(this.token, 'jellyfin', this.userId),
+      Authorization: authorization,
+      'X-Emby-Authorization': authorization,
       ...(this.token ? { 'X-Emby-Token': this.token } : {}),
       Accept: 'application/json',
       'Content-Type': 'application/json',
     };
+  }
+
+  clientIdentity(): ClientIdentity {
+    const identity = this.identity();
+    return resolveClientIdentity(identity);
+  }
+
+  private deviceId(): string {
+    return typeof this.deviceIdOverride === 'string' && /^[a-zA-Z0-9._-]{1,128}$/.test(this.deviceIdOverride)
+      ? this.deviceIdOverride : getDeviceId();
   }
 
   private url(path: string, params?: Record<string, unknown>): string {
@@ -411,7 +428,7 @@ export class MediaServerApi {
     const result = await this.post<PlaybackInfoResult>(`/Items/${itemId}/PlaybackInfo`, {
       ...options,
       DeviceProfile: {
-        Name: native ? 'MyJellyfinClient mpv' : 'MyJellyfinClient HTML5',
+        Name: `${this.clientIdentity().name} ${native ? 'mpv' : 'HTML5'}`,
         MaxStreamingBitrate: maxBitrate, MaxStaticBitrate: maxBitrate,
         MusicStreamingTranscodingBitrate: 384000,
         DirectPlayProfiles: native ? [
@@ -471,14 +488,14 @@ export class MediaServerApi {
     }
     return this.url(`/Videos/${itemId}/stream`, {
       Static: true, MediaSourceId: mediaSourceId, PlaySessionId: playSessionId,
-      DeviceId: getDeviceId(), api_key: this.token,
+      DeviceId: this.deviceId(), api_key: this.token,
     });
   }
 
   hlsUrl(itemId: string, mediaSourceId: string | undefined, playSessionId: string | undefined, source?: MediaSource): string {
     if (source?.TranscodingUrl) return this.resolveMediaUrl(source.TranscodingUrl);
     return this.url(`/Videos/${itemId}/master.m3u8`, {
-      MediaSourceId: mediaSourceId, PlaySessionId: playSessionId, DeviceId: getDeviceId(),
+      MediaSourceId: mediaSourceId, PlaySessionId: playSessionId, DeviceId: this.deviceId(),
       api_key: this.token, VideoCodec: 'h264', AudioCodec: 'aac,mp3',
       VideoBitrate: 100000000, AudioBitrate: 384000, MaxWidth: 3840,
     });

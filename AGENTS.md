@@ -23,9 +23,12 @@
 | `src/App.tsx`、`src/main.tsx` | 路由、桌面/浏览器播放器选择、主题初始化 |
 | `src/api/mediaServer.ts` | Jellyfin/Emby 共用 API、媒体类型、URL 解析、查询及分页 |
 | `src/api/detectServer.ts` | 服务器产品识别及 API 路径探测 |
+| `src/utils/clientIdentity.ts`、`src/utils/defaultClientIdentity.json` | 客户端名称预设、共享兼容默认标识和文本规范化；设备 ID 仍由 API 使用原有持久值 |
+| `src-tauri/src/client_identity.rs` | 桌面 WebView 的真实 HTTP User-Agent、共享兼容版本与只读 Windows 版本查询 |
 | `src/store/servers.ts` | 服务器登录状态、令牌、API 实例和持久化 |
 | `src/store/settings.ts`、`src/pages/Settings.tsx` | 设置定义、默认值、持久化和设置界面 |
 | `src/pages/Home.tsx`、`src/pages/Library.tsx` | 首页分类、最新内容、媒体库、合集和分页 |
+| `src/pages/Search.tsx` | 媒体搜索、失败重试和迟到响应保护；轮播搜索按钮通过 `serverId` 查询参数指定当前主页的服务器范围 |
 | `src/utils/listPresentation.ts` | 列表元信息、预览图片、HDR/分辨率、文件夹排序 |
 | `src/components/PosterCard.tsx`、`EpisodeRow.tsx`、`SectionRow.tsx` | 共享卡片、剧集行、横向列表 |
 | `src/components/LiquidGlass.tsx`、`src/utils/liquidGlass.ts`、`src/index.css` | 网页玻璃表面、圆角边缘位移图、主题与材质；只折射背景，正文保持清晰 |
@@ -35,6 +38,7 @@
 | `src/pages/Player.tsx` | 浏览器 HTML5/HLS 播放回退 |
 | `src/player/` | 播放偏好记忆、相邻媒体、键盘操作及退出事件 |
 | `src/player/playbackTitle.ts` | 元数据标题格式化及当前窗口标题，不持久化 |
+| `src/player/playbackDiagnostics.ts`、`src-tauri/src/playback_diagnostics.rs` | 分阶段播放诊断、HTTP 错误与 URL/凭据脱敏、非阻塞写入和日志轮转 |
 | `src/components/TitleBar.tsx`、`WindowResizeHandles.tsx` | 窗口标题栏和边缘缩放 |
 | `src/platform/window.ts` | Tauri 窗口 API 包装 |
 | `src-tauri/src/lib.rs` | 窗口创建、Tauri 命令注册和窗口事件 |
@@ -73,6 +77,7 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
 - Vite 文件监听排除 `.local`，避免 WebView2 独占 Cookie 等持久文件时触发 `EBUSY` 并终止开发服务；不能用删除开发数据解决监听问题。
 - 开发版截图保存在 `MJC_WEBVIEW_DATA/screenshots`（默认 `.local/webview2/screenshots`）；安装版优先使用系统图片目录的 `MyJellyfinClient` 文件夹，不可写时回退到应用本地数据目录的 `screenshots`。保存前验证真实文件写入权限，失败时清理本次预留文件；截图属于用户数据。
 - `.local` 包含开发账号、登录状态、设置和偏好，删除会重置开发版数据。它不是纯构建缓存。
+- 播放诊断默认写入 `MJC_WEBVIEW_DATA/logs/playback.log`（开发版默认 `.local/webview2/logs/playback.log`）；安装版使用应用本地数据目录的 `logs`，不可写时尝试应用缓存目录。每行 JSON 以独立播放诊断编号关联前端元数据/媒体源协商、所选协议标识、mpv 启动、真实版本/HTTP User-Agent、IPC 失败和警告/错误。约 2 MiB 后轮转为 `playback.log.1`，仅保留当前和上一份。密码、令牌、鉴权头与完整 URL 在前端和原生写入前脱敏；不记录账号、媒体标题、完整命令行或视频内容。后台限长队列不阻塞播放器，失败页面显示诊断编号和实际日志路径。已停止生成未脱敏的旧 `player/mpv-player.log`，不清理已有用户日志。
 - `.local`、`.codex-remote-attachments`、环境文件、密钥、日志、构建产物及 mpv 二进制不应提交。不要把用户提供的服务器地址、密码、令牌或截图写入源码和测试。
 - `node_modules`、`dist`、`src-tauri/target`、`src-tauri/gen`、`*.tsbuildinfo` 可重新生成。清理前先区分持久数据、运行资源和可再生产物；递归操作应验证绝对路径范围。
 - 必要运行资源包括 mpv、其控制脚本和毛玻璃 shader，以及 `src-tauri/resources/WebView2Loader.dll`，不能按普通临时文件删除。
@@ -87,8 +92,12 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
 5. 不要仅因「最新媒体」接口返回空数组就判断合集没有数据。分页的分类查询使用 `getLibraryItems` / `queryItems`，合集不是普通视频项目。
 6. 分类加载失败、空数据和仍在加载应能区分，并提供重试。不要吞掉错误后隐藏整个分类。
 7. 保留反向代理前缀、服务器协议差异、已有鉴权参数和媒体源的必要 HTTP 头。不要把本站令牌无条件追加到外部 URL。
+   公共识别接口跨域重定向时保留用户选择的入口，不将元数据域名保存为媒体服务器地址；同域前缀重定向和同主机默认端口的 HTTP→HTTPS 升级仍可采用。Emby 根接口识别成功后优先验证原入口下同一服务器 ID 的 `/emby` 或 `/mediabrowser` 前缀，未提供有效前缀时保留根接口。旧连接需重新编辑并登录才能重新识别保存入口，不按猜测批量改写已有连接。
 8. 章节预览使用服务器已有章节图片；缺少图片时回退到服务器封面，不为列表下载完整视频。索引图片使用兼容两种协议的路径形式。
 9. 取消数量上限不意味着一次渲染/下载全部轮播背景；当前轮播按需挂载临近图片，全部已加载项目仍可导航。
+10. 「设置 → 通用」分别配置 Jellyfin 和 Emby 客户端标识：对应产品的常用名称下拉、自定义名称、版本和设备名称存储于 `clientIdentities`。空值使用共享 `defaultClientIdentity.json` 的 RodelPlayer、2.2610.12.0 及 Windows PC 兼容标识；保留手动设置，各自的默认项只恢复对应产品三项。按实际服务器协议读取标识，登录、缓存/重建的 API 实例和连通性探测共用；尚未知产品的公开探测尝试两套不同标识，不发送账号、令牌或密码，网络/JSON 失败不重复等待同一端点。鉴权字段按 URL 编码，保留稳定的设备 ID；播放协商名称随客户端名称变化，但媒体能力仍按实际播放器生成。桌面 WebView 创建时设置真实 HTTP User-Agent 为同一共享名称/版本，并追加只读查询的实际 Windows NT 版本、构建号和架构，覆盖首次登录及其他 WebView HTTP 请求；设置页字段仅影响鉴权标识，不改变这一固定 UA。纯浏览器开发模式仍使用浏览器 UA，mpv 视频请求仍沿用原有 UA。不向外部图片/媒体 URL 附加本站鉴权标识或令牌；WebView UA 只含公开兼容名称/版本与平台信息。
+11. 已识别服务器的 `Authorization` 和 `X-Emby-Authorization` 必须使用同一协议前缀：Emby 使用 `Emby`，Jellyfin 使用 `MediaBrowser`。账号密码通过 `/Users/AuthenticateByName` 的 `Username` / `Pw` 换取服务器返回的 `AccessToken`，原样按服务器保存；客户端不生成、散列或跨应用借用令牌，也不为刷新令牌擅自重置持久设备 ID。
+12. 编辑 Emby 连接可显式勾选「重新登记此服务器的登录设备」，并填写该连接的客户端名称、重新输入密码。仅该连接生成新的 `deviceId`，成功登录后与 `clientName` 一起保存；失败保留原连接。之后登录、缓存/重建 API、播放协商和流 URL 共用此固定 ID，客户端名称优先使用连接的覆盖值，版本及设备名称仍来自对应产品设置。其他连接和原有全局设备 ID 保持稳定；普通删除、添加、编辑和重新登录不自动重置设备身份。该选项用于服务端按首次设备登记限制播放的兼容情况，不应自动替用户选择客户端名称。
 
 ## 播放器不能退化的行为
 
@@ -121,9 +130,11 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
 - 自动隐藏默认 3 秒，旧设置通过一次性版本迁移采用 3 秒；之后用户重新选择的间隔保持持久化。菜单、媒体信息和进度拖动期间保持控件可见。
 - ASS 行级对齐标签不要重复或冲突：文字应使用对应 `an7/an8/an9`，矢量绘制明确使用 `an7`。视觉位置与点击区域要同步。
 - 新设置必须接通保存、读取、执行和平台适用范围；不能只有设置页开关。浏览器不能实现的桌面设置应明确标注。
+- 「设置 → 播放 → 缓存」支持 1–8192 MB 的整数预读缓存上限，默认 150 MB，按十进制 MB 转为 `demuxer-max-bytes`（1 MB = 1,000,000 字节）；不改变后向缓存配置。回车或输入框失焦后保存，下次开始原生播放时生效；浏览器中禁用。旧设置补默认值，保存/读取及原生边界均校验范围。
 - 简繁字幕偏好不能只靠通用中文语言码；轨道记忆在同媒体源优先 ID，跨媒体源按语言、名称等元数据匹配。
 - 外挂字幕规则只过滤真正的外部字幕，不应误删服务器提取出的内嵌字幕。
 - mpv 的 HTTPS 使用只读导出的 Windows 信任根证书，保留 TLS 校验；不要用关闭校验来掩盖证书配置问题。
+- 原生媒体网络沿用 mpv 默认网络后端；诊断日志记录实际 `curl-enabled` 值，不能仅凭 HTTP 522 或不同后端推定原因。FFmpeg/Lavf 的本地兼容回归覆盖跨端口 302 重定向、媒体读取、必要请求头及不向跳转目标追加原 URL 的令牌，保持 TLS 校验与 Windows 信任根配置。
 - 「适应窗口」保持完整视频帧的比例，宽屏显示含内嵌上下黑边的 16:9 视频时，左右留黑可能是正常比例结果；「裁切填充」由用户主动选择并完整铺满，不能恢复旧的 `panscan=0.4`。
 
 ## 验证命令
@@ -145,13 +156,15 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 & ./src-tauri/resources/mpv/mpv.com --no-config --vo=null --idle=yes --script=scripts/test-player-osc.lua
 ```
 
-`test:home` 覆盖全部分类、8 个合集、成员浏览、多页加载、重试和取消；`test:servers` 使用本地 HTTP fixture；`test:playback` 覆盖关闭、元数据标题及慢网络生命周期；`test:settings` 覆盖真实组件、偏好和 3 秒迁移。Rust/Lua 测试覆盖原生输入、启动重试、TLS、截图目录回退、真实 GPU/ASS 渲染、毛玻璃像素效果和截图隔离、开播窗口比例及响应式控件，需本地 mpv 和 Windows 环境。Rust 回归同时运行 Lua 控件交互测试；原生控件渲染使用 `scripts/test-player-osc-render.lua` 的合成媒体状态，不读取账号或服务器截图。
+`test:home` 覆盖全部分类、8 个合集、成员浏览、多页加载、重试和取消；`test:servers` 使用本地 HTTP fixture，并用真实 Chromium 检查登录接收端看到的统一 UA、默认鉴权标识和手动覆盖；`test:playback` 覆盖关闭、元数据标题及慢网络生命周期；`test:settings` 覆盖真实组件、偏好和 3 秒迁移。Rust/Lua 测试覆盖原生输入、启动重试、TLS、截图目录回退、真实 GPU/ASS 渲染、毛玻璃像素效果和截图隔离、开播窗口比例及响应式控件，需本地 mpv 和 Windows 环境；`client_identity` 原生测试覆盖共享标识与实际 Windows 平台的 UA 格式。Rust 回归同时运行 Lua 控件交互测试；原生控件渲染使用 `scripts/test-player-osc-render.lua` 的合成媒体状态，不读取账号或服务器截图。
+播放诊断回归覆盖脱敏、完整响应体中的 HTTP 错误、独立编号、取消后的迟到响应、日志轮转与满队列非阻塞；真实 mpv 从本地 HTTP 522 fixture 接收日志事件并与 `end-file/error` 关联。
 
 `test-mpv-setup.ps1` 在 Windows PowerShell 5.1 下使用离线传输 fixture 和真实 `tar.exe` 验证缺失下载、完整资源复用、部分资源修复、控制脚本保留、校验失败、架构与压缩包检查、安装回滚和临时目录清理，不使用账号或访问网络。
 
 `test:ui` 覆盖圆角玻璃透镜的中性中心、增强边缘折射、长面板采样、纹理尺寸与缓存、ResizeObserver/动画帧清理，首页/详情临时背景的路由/实例隔离、预览开关与图片失败重试，以及搜索/记录失败重试、迟到响应和弹窗 StrictMode 焦点恢复。玻璃材质需另用实际 Chromium/WebView2 视觉核对；其他浏览器保留模糊和高光回退。海报、头像与轨道卡片使用轻量静态表面，不为每个媒体项目创建 SVG 透镜；首页媒体区只用一个随滚动保持在可见窗口内的玻璃层，避免无限分页扩大 GPU 材质尺寸。减少动态效果、高对比度与减少透明度偏好有 CSS 回退。
 
 `test:ui` 中的玻璃按钮回归使用真实 React 与无头 Chromium 验证原生点击、禁用、ref、表单类型、事件透传和列表导航。默认查找本机 Chrome / Edge，可用 `MJC_TEST_CHROMIUM` 指定可信浏览器路径；测试只用合成页面与独立临时 profile，不使用用户浏览器账号或访问服务器，结束后清理经过路径校验的临时目录。
+搜索页布局回归同样使用真实 React 与 Chromium，测量默认空状态、加载、无结果、错误、清空和未选择服务器时的滚动高度，并验证普通/窄窗口中结果列表可滚动到最后一项。
 
 若受限执行环境无法读取构建工具目录或系统临时目录，应区分权限问题和代码问题。必要时为本次验证指定可写的临时目录，不能据此改坏用户正常构建配置；不要在敏感输出中打印令牌。
 

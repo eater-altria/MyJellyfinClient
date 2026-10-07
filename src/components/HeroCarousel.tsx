@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MediaServerApi, BaseItem } from '../api/mediaServer';
-import { IconChevronLeft, IconChevronRight } from './icons';
+import { IconChevronLeft, IconChevronRight, IconSearch } from './icons';
 import LiquidGlass from './LiquidGlass';
 
 /** Full-width cross-fading hero carousel fed by items with backdrops. */
@@ -91,16 +91,25 @@ export default function HeroCarousel({
       {/* Bottom gradient overlay */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/50 via-black/10 to-transparent" />
 
-      {/* Chevron buttons */}
-      {count > 1 && (
-        <>
+      {/* Search and carousel navigation share the same floating controls. */}
+      <div className="absolute right-5 top-5 z-20 flex items-center gap-2">
+        <button type="button"
+          onClick={event => {
+            event.stopPropagation();
+            navigate(`/search?${new URLSearchParams({ serverId })}`);
+          }}
+          aria-label="搜索当前服务器媒体库" title="搜索"
+          className="glass-icon-button glass-dark h-10 w-10 text-white">
+          <IconSearch size={18} />
+        </button>
+        {count > 1 && <>
           <button
             onClick={(e) => {
               e.stopPropagation();
               go(-1);
             }}
             aria-label="上一张预览"
-            className="glass-icon-button glass-dark absolute right-[68px] top-5 z-20 h-10 w-10 text-white"
+            className="glass-icon-button glass-dark h-10 w-10 text-white"
           >
             <IconChevronLeft size={18} />
           </button>
@@ -110,12 +119,12 @@ export default function HeroCarousel({
               go(1);
             }}
             aria-label="下一张预览"
-            className="glass-icon-button glass-dark absolute right-5 top-5 z-20 h-10 w-10 text-white"
+            className="glass-icon-button glass-dark h-10 w-10 text-white"
           >
             <IconChevronRight size={18} />
           </button>
-        </>
-      )}
+        </>}
+      </div>
 
       {/* The scenic image remains dominant; the caption floats on a glass surface. */}
       <LiquidGlass tone="dark" intensity="subtle" className="pointer-events-none absolute bottom-12 left-5 right-5 flex flex-col items-start gap-2 rounded-[24px] p-4 text-left sm:left-6 sm:right-auto sm:max-w-[62%] sm:gap-3 sm:p-5">

@@ -2,6 +2,10 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { MediaServerApi, AuthResult, normalizeAddress, type ServerProtocol } from '../api/mediaServer';
 import { detectServer } from '../api/detectServer';
+import { getClientIdentity } from './settings';
+import { normalizeClientIdentityText } from '../utils/clientIdentity';
+
+export class ServerRegistrationError extends Error {}
 
 export interface SavedServer {
   id: string; // local uuid
@@ -11,6 +15,8 @@ export interface SavedServer {
   userId?: string;
   userName?: string;
   token?: string;
+  deviceId?: string; // Explicit per-connection registration; legacy connections keep the global ID.
+  clientName?: string; // Optional per-connection client name, chosen when registering a new device.
   remoteServerId?: string;
   jellyfinServerId?: string; // Legacy saved connection field.
   version?: string;
@@ -28,7 +34,7 @@ interface ServersState {
   /** live API instances keyed by saved server id */
   apis: Record<string, MediaServerApi>;
   addServer: (address: string, username: string, password: string, name?: string, onDetected?: (protocol: ServerProtocol) => void) => Promise<SavedServer>;
-  updateServer: (id: string, options: { name: string; address: string; username: string; password?: string; onDetected?: (protocol: ServerProtocol) => void }) => Promise<void>;
+  updateServer: (id: string, options: { name: string; address: string; username: string; password?: string; onDetected?: (protocol: ServerProtocol) => void; registerNewDevice?: { clientName: string } }) => Promise<void>;
   removeServer: (id: string) => void;
   setActive: (id: string | null) => void;
   refreshServer: (id: string) => Promise<void>;
@@ -36,8 +42,13 @@ interface ServersState {
 }
 
 function makeApi(s: SavedServer): MediaServerApi {
-  return new MediaServerApi(s.address, s.token, s.userId, s.protocol);
+  return new MediaServerApi(s.address, s.token, s.userId, s.protocol, () => {
+    const identity = getClientIdentity(s.protocol ?? 'jellyfin');
+    return s.clientName ? { ...identity, name: s.clientName } : identity;
+  }, s.deviceId);
 }
+
+const discoveryIdentities = () => ({ jellyfin: getClientIdentity('jellyfin'), emby: getClientIdentity('emby') });
 
 export const useServers = create<ServersState>()(
   persist(
@@ -53,9 +64,9 @@ export const useServers = create<ServersState>()(
       },
 
       async addServer(address, username, password, name, onDetected) {
-        const { address: base, protocol, info } = await detectServer(address);
+        const { address: base, protocol, info } = await detectServer(address, { clientIdentities: discoveryIdentities() });
         onDetected?.(protocol);
-        const api = new MediaServerApi(base, undefined, undefined, protocol);
+        const api = new MediaServerApi(base, undefined, undefined, protocol, () => getClientIdentity(protocol));
         const auth: AuthResult = await api.authenticate(username, password);
         const saved: SavedServer = {
           id: crypto.randomUUID(),
@@ -93,13 +104,23 @@ export const useServers = create<ServersState>()(
         if (!original) throw new Error('服务器不存在');
         const address = normalizeAddress(options.address);
         let saved = { ...original, name: options.name.trim() || original.name, address };
-        if (address !== original.address || options.username !== original.userName || options.password !== undefined) {
-          const detected = await detectServer(address);
+        if (address !== original.address || options.username !== original.userName || options.password !== undefined || options.registerNewDevice) {
+          const identities = discoveryIdentities();
+          if (options.registerNewDevice) {
+            identities.emby = { ...identities.emby, name: normalizeClientIdentityText(options.registerNewDevice.clientName) || identities.emby.name };
+          }
+          const detected = await detectServer(address, { clientIdentities: identities });
+          if (options.registerNewDevice && detected.protocol !== 'emby') throw new ServerRegistrationError('重新登记登录设备仅适用于 Emby 服务器');
           options.onDetected?.(detected.protocol);
-          const api = new MediaServerApi(detected.address, undefined, undefined, detected.protocol);
+          const registration = options.registerNewDevice && detected.protocol === 'emby' ? {
+            deviceId: crypto.randomUUID(),
+            clientName: normalizeClientIdentityText(options.registerNewDevice.clientName) || getClientIdentity(detected.protocol).name,
+          } : {};
+          const loginServer = { ...saved, ...registration, address: detected.address, protocol: detected.protocol };
+          const api = makeApi({ ...loginServer, token: undefined, userId: undefined });
           const info = detected.info;
           const auth = await api.authenticate(options.username, options.password ?? '');
-          saved = { ...saved, address: detected.address, protocol: detected.protocol,
+          saved = { ...loginServer,
             userId: auth.userId, userName: auth.userName, token: auth.token,
             remoteServerId: auth.serverId || info.Id, version: info.Version,
             lastConnected: new Date().toISOString(), lastError: undefined,

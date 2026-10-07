@@ -12,7 +12,8 @@ function load(file, imports = {}) {
   return module.exports;
 }
 
-const media = load('src/api/mediaServer.ts');
+const identity = load('src/utils/clientIdentity.ts', { './defaultClientIdentity.json': require('../src/utils/defaultClientIdentity.json') });
+const media = load('src/api/mediaServer.ts', { '../utils/clientIdentity': identity });
 const presentation = load('src/utils/listPresentation.ts', { '../api/mediaServer': media });
 const defaults = {
   showItemCountInTitle: true, showFolderTime: true, sortFoldersSeparately: true,

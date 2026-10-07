@@ -30,7 +30,9 @@ global.window = {
 };
 const runTimers = () => { const pending = [...timers.values()]; timers.clear(); pending.forEach(fn => fn()); };
 
-function renderHarness(file, serverState) {
+function renderHarness(file, serverState, initialSearch = '') {
+  let searchParams = new URLSearchParams(initialSearch);
+  const navigation = [];
   let cursor = 0, unmounted = false, writesAfterUnmount = 0;
   const hooks = [], effects = [];
   const changed = (previous, deps) => !previous || deps.some((value, index) => !Object.is(value, previous[index]));
@@ -63,7 +65,10 @@ function renderHarness(file, serverState) {
   const component = load(file, {
     react,
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
-    'react-router-dom': { useNavigate: () => () => {} },
+    'react-router-dom': {
+      useNavigate: () => path => navigation.push(path),
+      useSearchParams: () => [searchParams, next => { searchParams = new URLSearchParams(next); }],
+    },
     '../store/servers': { useServers },
     '../store/settings': { useSettings: selector => selector({ showItemCountInTitle: true, sortFoldersSeparately: false }) },
     '../utils/listPresentation': { orderMediaItems: items => items },
@@ -76,6 +81,9 @@ function renderHarness(file, serverState) {
     render() { cursor = 0; const tree = component(); effects.splice(0).forEach(effect => effect()); return tree; },
     unmount() { hooks.forEach(hook => hook?.cleanup?.()); unmounted = true; },
     get writesAfterUnmount() { return writesAfterUnmount; },
+    navigation,
+    get searchParams() { return searchParams; },
+    setQuery(value) { searchParams = new URLSearchParams(value); },
   };
 }
 
@@ -129,6 +137,28 @@ function setSearch(page, term) {
   assert.equal(search.writesAfterUnmount, 0, 'Unmounted search must not update state');
   console.log('PASS: search failure/retry, clear action, server changes and unmount ignore stale responses');
 
+  const scopedCalls = [];
+  const scopedState = { activeServerId: 'other', apis: {
+    home: { search: async term => { scopedCalls.push(term); return { Items: [mediaItem('home-result')] }; } },
+    other: { search() { throw new Error('Home query used the wrong server'); } },
+  } };
+  const scoped = renderHarness('src/pages/Search.tsx', scopedState, new URLSearchParams({ serverId: 'home', q: '铁达尼号 & +?' }));
+  assert.equal(find(scoped.render(), node => node.type === 'input')[0].props.value, '铁达尼号 & +?');
+  runTimers(); await flush(); tree = scoped.render();
+  assert.deepEqual(scopedCalls, ['铁达尼号 & +?']);
+  find(tree, node => node.type === 'Poster')[0].props.onClick();
+  assert.equal(scoped.navigation.at(-1), '/server/home/movie/home-result');
+  setSearch(scoped, 'edited'); await flush();
+  assert.equal(scoped.searchParams.get('serverId'), 'home', 'Editing search must preserve the home server scope');
+  scoped.setQuery('serverId=home&q=back'); scoped.render(); runTimers(); await flush();
+  assert.equal(scopedCalls.at(-1), 'back', 'URL changes must update the search query');
+  find(scoped.render(), node => node.type === 'button' && node.props['aria-label'] === '清除搜索')[0].props.onClick();
+  scoped.render();
+  assert.equal(scoped.searchParams.get('q'), null);
+  assert.equal(scoped.searchParams.get('serverId'), 'home');
+  scoped.unmount();
+  console.log('PASS: home query hydration, scoped search/result navigation, query edits and URL changes');
+
   const historyRequests = [];
   const historyApi = { getPlayedItems() { const request = deferred(); historyRequests.push(request); return request.promise; } };
   const historyState = { activeServerId: 'first', apis: { first: historyApi, second: { ...historyApi } } };
@@ -163,7 +193,8 @@ function setSearch(page, term) {
       useEffect: effect => { dialogEffects.push(effect); },
     },
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
-    '../store/servers': { useServers: selector => selector({ addServer() {}, updateServer() {} }) },
+    '../store/servers': { useServers: selector => selector({ addServer() {}, updateServer() {} }), ServerRegistrationError: class ServerRegistrationError extends Error {} },
+    '../store/settings': { getClientIdentity: () => ({name:'Fixture Client'}) },
     '../api/mediaServer': { ApiError: class ApiError extends Error {}, serverProtocolName: value => value },
     '../api/detectServer': { ServerDetectionError: class ServerDetectionError extends Error {} },
     './icons': { IconClose: 'Icon', IconJellyfin: 'Icon', IconEmby: 'Icon' },
@@ -180,4 +211,33 @@ function setSearch(page, term) {
   strictCleanup();
   assert.equal(document.activeElement, trigger);
   console.log('PASS: dialog focus enters after StrictMode effect replay and restores on close');
+
+  let dialogCursor=0;
+  const dialogState=[], updates=[];
+  const RegistrationDialog=load('src/components/AddServerDialog.tsx',{
+    react:{
+      useState(initial){const index=dialogCursor++;if(!(index in dialogState))dialogState[index]=typeof initial==='function'?initial():initial;return[dialogState[index],value=>{dialogState[index]=value;}];},
+      useRef:()=>({current:null}),useId:()=> 'registration-dialog',useEffect(){},
+    },
+    'react/jsx-runtime':{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})},
+    '../store/servers':{useServers:selector=>selector({addServer(){},async updateServer(id,options){updates.push({id,options});}}),ServerRegistrationError:class extends Error{}},
+    '../store/settings':{getClientIdentity:()=>({name:'Default Fixture Client'})},
+    '../api/mediaServer':{ApiError:class extends Error{},serverProtocolName:value=>value},
+    '../api/detectServer':{ServerDetectionError:class extends Error{}},
+    './icons':{IconClose:'Icon',IconJellyfin:'Icon',IconEmby:'Icon'},'./LiquidGlass':{__esModule:true,default:'Glass'},
+  }).default;
+  const fixtureServer={id:'registration',protocol:'emby',name:'Fixture',address:'http://fixture.invalid/emby',userName:'tester'};
+  const renderDialog=()=>{dialogCursor=0;return RegistrationDialog({server:fixtureServer,onClose(){}});};
+  let registrationTree=renderDialog();
+  const checkbox=()=>find(registrationTree,node=>node.type==='input'&&node.props.type==='checkbox')[0];
+  assert.equal(checkbox().props.checked,false,'Device registration must be an explicit opt-in');
+  assert.equal(find(registrationTree,node=>node.props?.id==='registration-dialog-client').length,0);
+  checkbox().props.onChange({target:{checked:true}});registrationTree=renderDialog();
+  find(registrationTree,node=>node.props?.id==='registration-dialog-client')[0].props.onChange({target:{value:'Supported Fixture Client'}});
+  find(registrationTree,node=>node.props?.id==='registration-dialog-password')[0].props.onChange({target:{value:'fixture-password'}});
+  registrationTree=renderDialog();find(registrationTree,node=>node.type==='form')[0].props.onSubmit({preventDefault(){}});await flush();
+  assert.equal(updates[0].id,'registration');
+  assert.deepEqual(updates[0].options.registerNewDevice,{clientName:'Supported Fixture Client'});
+  assert.equal(updates[0].options.password,'fixture-password');
+  console.log('PASS: registration is opt-in, exposes the connection client name and submits fresh login credentials');
 })().catch(error => { console.error(error); process.exitCode = 1; });

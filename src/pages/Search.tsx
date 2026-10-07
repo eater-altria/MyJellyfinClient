@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { BaseItem } from '../api/mediaServer';
 import { useServers } from '../store/servers';
 import { useSettings } from '../store/settings';
@@ -11,15 +11,23 @@ import LiquidGlass from '../components/LiquidGlass';
 
 export default function SearchPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const showCount = useSettings((settings) => settings.showItemCountInTitle);
   const foldersFirst = useSettings((settings) => settings.sortFoldersSeparately);
   const activeServerId = useServers((s) => s.activeServerId);
+  const serverId = searchParams.get('serverId') ?? activeServerId;
   const api = useMemo(
-    () => (activeServerId ? useServers.getState().getApi(activeServerId) : null),
-    [activeServerId],
+    () => (serverId ? useServers.getState().getApi(serverId) : null),
+    [serverId],
   );
 
-  const [term, setTerm] = useState('');
+  const term = searchParams.get('q') ?? '';
+  const setTerm = (value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set('q', value);
+    else next.delete('q');
+    setSearchParams(next, { replace: true });
+  };
   const [results, setResults] = useState<BaseItem[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,13 +67,13 @@ export default function SearchPage() {
   }, [term, api, retry]);
 
   const open = (item: BaseItem) => {
-    if (!activeServerId) return;
+    if (!serverId) return;
     if (item.Type === 'Movie') {
-      navigate(`/server/${activeServerId}/movie/${item.Id}`);
+      navigate(`/server/${serverId}/movie/${item.Id}`);
     } else if (item.Type === 'Series') {
-      navigate(`/server/${activeServerId}/series/${item.Id}`);
+      navigate(`/server/${serverId}/series/${item.Id}`);
     } else if (item.Type === 'Episode') {
-      navigate(`/server/${activeServerId}/episode/${item.Id}`);
+      navigate(`/server/${serverId}/episode/${item.Id}`);
     }
   };
 
@@ -83,11 +91,7 @@ export default function SearchPage() {
   } else if (error) {
     body = <ErrorState message={error} onRetry={() => setRetry((value) => value + 1)} />;
   } else if (searching && results == null) {
-    body = (
-      <div className="mt-10">
-        <Spinner label="搜索中…" />
-      </div>
-    );
+    body = <Spinner label="搜索中…" />;
   } else if (results && results.length === 0) {
     body = <EmptyState icon={<IconSearch size={40} />} title="没有找到相关内容" />;
   } else if (results) {
@@ -115,31 +119,36 @@ export default function SearchPage() {
       </>
     );
   }
+  const hasResults = !!api && !!term.trim() && !error && !!results?.length;
 
   return (
-    <div className="h-full overflow-y-auto px-4 pb-10 sm:px-8">
-      <h1 className="page-heading mt-8">搜索</h1>
-      <p className="page-subtitle mt-2">寻找你想看的电影与剧集。</p>
-      <LiquidGlass intensity="subtle" className="relative mt-7 w-full max-w-[640px] !rounded-full">
-        <span className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-text-secondary">
-          <IconSearch size={19} />
-        </span>
-        <input
-          ref={inputRef}
-          autoFocus
-          aria-label="搜索媒体库"
-          value={term}
-          onChange={(e) => setTerm(e.target.value)}
-          placeholder="搜索电影、剧集…"
-          className="h-12 w-full rounded-full bg-transparent pl-12 pr-12 text-[14px] text-text-primary outline-none placeholder:text-text-secondary focus-visible:ring-2 focus-visible:ring-accent/40"
-        />
-        {term && (
-          <button onClick={() => { setTerm(''); inputRef.current?.focus(); }} aria-label="清除搜索" className="glass-icon-button absolute right-3 top-1/2 h-7 min-h-0 w-7 -translate-y-1/2 text-text-secondary">
-            <IconClose size={14} />
-          </button>
-        )}
-      </LiquidGlass>
-      {body}
+    <div className="h-full overflow-y-auto px-4 sm:px-8">
+      <div className="flex min-h-full flex-col pb-10">
+        <h1 className="page-heading mt-8">搜索</h1>
+        <p className="page-subtitle mt-2">寻找你想看的电影与剧集。</p>
+        <LiquidGlass intensity="subtle" className="relative mt-7 w-full max-w-[640px] shrink-0 !rounded-full">
+          <span className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-text-secondary">
+            <IconSearch size={19} />
+          </span>
+          <input
+            ref={inputRef}
+            autoFocus
+            aria-label="搜索媒体库"
+            value={term}
+            onChange={(e) => setTerm(e.target.value)}
+            placeholder="搜索电影、剧集…"
+            className="h-12 w-full rounded-full bg-transparent pl-12 pr-12 text-[14px] text-text-primary outline-none placeholder:text-text-secondary focus-visible:ring-2 focus-visible:ring-accent/40"
+          />
+          {term && (
+            <button onClick={() => { setTerm(''); inputRef.current?.focus(); }} aria-label="清除搜索" className="glass-icon-button absolute right-3 top-1/2 h-7 min-h-0 w-7 -translate-y-1/2 text-text-secondary">
+              <IconClose size={14} />
+            </button>
+          )}
+        </LiquidGlass>
+        <div className={hasResults ? '' : 'flex flex-1 flex-col justify-center [&>div]:h-auto [&>div]:min-h-0 [&>div]:py-0'}>
+          {body}
+        </div>
+      </div>
     </div>
   );
 }

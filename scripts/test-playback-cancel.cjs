@@ -33,7 +33,14 @@ function mount(protocol, pending) {
   const signals = [];
   const api = {
     protocol,
-    getItem: (_id, signal) => { signals.push(signal); return pending === 'item' ? delayed.promise : Promise.resolve(item); },
+    clientIdentity: () => ({name:'Fixture Client', version:'1.0', deviceName:'Fixture PC'}),
+    token: 'private-fixture-token', baseUrl: 'http://fixture',
+    getItem: (_id, signal) => {
+      signals.push(signal);
+      if (pending === 'api-error') return Promise.reject(Object.assign(new Error('fixture failure'),
+        {status:403,body:'Denied token=private-fixture-token https://fixture/stream?api_key=private-fixture-token'}));
+      return pending === 'item' ? delayed.promise : Promise.resolve(item);
+    },
     getPlaybackInfo: (_id, _player, signal) => {
       signals.push(signal);
       return pending === 'info' ? delayed.promise : Promise.resolve({ MediaSources: item.MediaSources });
@@ -58,6 +65,7 @@ function mount(protocol, pending) {
       useSearchParams: () => [new URLSearchParams()], useNavigate: () => n => calls.push(['navigate', n]) },
     '@tauri-apps/api/core': { invoke: (name, args) => {
       calls.push([name, args]);
+      if (name === 'get_playback_log_path') return Promise.resolve('D:/fixture/playback.log');
       if (name === 'player_escape') return Promise.resolve(true);
       return name === 'start_playback' && pending === 'ipc' ? delayed.promise : Promise.resolve();
     } },
@@ -66,7 +74,8 @@ function mount(protocol, pending) {
       return () => events.delete(name);
     } },
     '../store/servers': { useServers: { getState: () => ({ getApi: () => pending === 'noserver' ? null : api, servers: [] }) } },
-    '../store/settings': { useSettings: { getState: () => ({ resumeFromLastPosition: true }) } },
+    '../store/settings': { useSettings: { getState: () => ({ resumeFromLastPosition: true, playerCacheSizeMB: 512 }) },
+      getClientIdentity: () => ({name:'Fixture Client', version:'1.0', deviceName:'Fixture PC'}) },
     '../player/playbackPreferences': { getPlaybackPreferences: () => ({}), rememberTrack: () => {},
       saveSubtitleSearchQueries: () => {}, getAdjacentMedia: async () => undefined },
     '../player/playbackTitle': { mediaTitle, usePlaybackTitle },
@@ -77,6 +86,11 @@ function mount(protocol, pending) {
       windowIsFullscreen: async () => false, windowMinimize() {}, windowToggleMaximize() {} },
     './icons': { IconClose() {}, IconMaximize() {}, IconMinimize() {}, IconPlay() {} },
   };
+  const diagnosticsModule = {exports:{}};
+  const diagnosticsCode = esbuild.transformSync(fs.readFileSync('src/player/playbackDiagnostics.ts','utf8'), {loader:'ts',format:'cjs'}).code;
+  new Function('require','module','exports',diagnosticsCode)(name => name === '../platform/window'
+    ? {isTauri:true} : modules[name], diagnosticsModule, diagnosticsModule.exports);
+  modules['../player/playbackDiagnostics'] = diagnosticsModule.exports;
   const bundle = { exports: {} };
   new Function('require', 'module', 'exports', 'window', code)(name => {
     assert(modules[name], `Unexpected import: ${name}`);
@@ -113,6 +127,8 @@ function mount(protocol, pending) {
         assert(player.signals.every(s => !s.aborted));
         if (pending === 'media') {
           assert(player.calls.some(c => c[0] === 'start_playback'));
+          assert.equal(player.calls.find(c => c[0] === 'start_playback')[1].opts.settings.playerCacheSizeMB, 512,
+            'Native startup must receive the saved cache size for either server protocol');
           assert(!player.states.includes(false), 'IPC startup must not end the media loading screen');
           player.events.get('mpv://position')({ payload: { position: 0, duration: 0, paused: false, active: true } });
         }
@@ -171,7 +187,16 @@ function mount(protocol, pending) {
   disposed.cleanup(); // StrictMode cleanup while listen() is still resolving.
   await flush();
   assert.equal(disposed.events.size, 0);
-  assert.equal(disposed.calls.length, 0);
+  assert(disposed.calls.every(call => ['record_playback_diagnostic','get_playback_log_path'].includes(call[0])), 'Disposed playback may record diagnostics but must not start media');
+  const apiFailure = mount('emby', 'api-error');
+  await flush();
+  const loggedFailure = apiFailure.calls.find(call => call[0] === 'record_playback_diagnostic' && call[1].stage === 'playback.failed');
+  assert.equal(loggedFailure[1].details.stage, 'metadata');
+  assert.equal(loggedFailure[1].details.httpStatus, 403);
+  const safeLog = JSON.stringify(apiFailure.calls.filter(call => call[0] === 'record_playback_diagnostic'));
+  assert(!safeLog.includes('private-fixture-token') && !safeLog.includes('http://fixture') && !safeLog.includes('https://fixture'), 'Failure logs must not expose credentials or URLs');
+  assert(!apiFailure.calls.some(call => call[0] === 'start_playback'));
+  apiFailure.cleanup();
   const missing = mount('emby', 'noserver');
   missing.close();
   assert.equal(missing.calls.filter(c => c[0] === 'navigate').length, 1, 'Close must also exit a missing-server error page');

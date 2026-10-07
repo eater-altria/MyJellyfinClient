@@ -8,7 +8,8 @@ function load(file, imports = {}) {
   new Function('require','module','exports',code)(name => imports[name] ?? require(name),module,module.exports);
   return module.exports;
 }
-const media = load('src/api/mediaServer.ts');
+const identity = load('src/utils/clientIdentity.ts', { './defaultClientIdentity.json': require('../src/utils/defaultClientIdentity.json') });
+const media = load('src/api/mediaServer.ts', { '../utils/clientIdentity': identity });
 const views = [
   {Id:'first',Name:'First',CollectionType:'movies'},
   {Id:'movies',Name:'Movies',CollectionType:'movies'},
@@ -143,7 +144,7 @@ const buttons=tree=>find(tree,n=>n.type==='button');
   const Hero=load('src/components/HeroCarousel.tsx',{
     react:{useState:initial=>{const i=heroCursor++;return [heroStates[i]??initial,next=>{heroStates[i]=typeof next==='function'?next(heroStates[i]):next;}];},useCallback:fn=>fn,useEffect:effect=>heroEffects.push(effect)},
     'react/jsx-runtime':{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})},
-    'react-router-dom':{useNavigate:()=>()=>{}},'./icons':{IconChevronLeft:'Icon',IconChevronRight:'Icon'},
+    'react-router-dom':{useNavigate:()=>path=>navigation.push(path)},'./icons':{IconChevronLeft:'Icon',IconChevronRight:'Icon',IconSearch:'Icon'},
     './LiquidGlass':{__esModule:true,default:'Glass'},
   }).default;
   const carouselItems=items('carousel',61);
@@ -159,14 +160,26 @@ const buttons=tree=>find(tree,n=>n.type==='button');
   assert.equal(heroNotifications.at(-1),carouselItems[0],'The first visible carousel item must publish itself');
   assert.equal(find(hero,n=>n.type==='img').length,3,'the unlimited carousel must not download every backdrop at once');
   const heroButton=label=>buttons(hero).find(button=>button.props['aria-label']===label);
+  const searchButton=heroButton('搜索当前服务器媒体库');
+  assert(searchButton&&searchButton.props.title==='搜索','Carousel search must have an accessible name and hover hint');
+  let stopped=false;
+  searchButton.props.onClick({stopPropagation(){stopped=true;}});
+  assert(stopped,'Searching must not open the current media detail');
+  const searchUrl=new URL(navigation.at(-1),'https://fixture');
+  assert.equal(searchUrl.pathname,'/search');
+  assert.equal(searchUrl.searchParams.get('serverId'),'server','Carousel search must keep the displayed server scope');
   assert(heroButton('上一张预览')&&heroButton('下一张预览'),'both carousel directions remain accessible');
   assert.equal(buttons(hero).filter(button=>button.props['aria-label']?.startsWith('查看第 ')).length,7,'keep a bounded indicator strip rather than dozens of dots');
   for(let i=0;i<60;i++)heroButton('下一张预览').props.onClick({stopPropagation(){}});
   hero=renderHero();
   assert(find(hero,n=>n.type==='img'&&n.props.alt==='carousel 60'&&n.props.className.includes('opacity-100')).length,'all carousel items remain navigable');
   assert.equal(heroNotifications.at(-1),carouselItems[60],'Backdrop publication must follow navigation to the last loaded item');
+  hero=renderHero([carouselItems[0]]);
+  assert(heroButton('搜索当前服务器媒体库'),'A single-item carousel must retain search');
+  assert(!heroButton('上一张预览')&&!heroButton('下一张预览'),'A single-item carousel needs no arrows');
   renderHero([]);
   assert.equal(heroNotifications.at(-1),null,'An emptied carousel must publish the gradient fallback');
   console.log('PASS: unlimited carousel navigation with lazy backdrop rendering');
+  console.log('PASS: circular carousel search, current-server navigation, click isolation and single-item previews');
   console.log('PASS: current carousel artwork, preview settings, empty-image fallback and home backdrop cleanup');
 })().catch(error=>{console.error(error);process.exitCode=1;});

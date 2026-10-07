@@ -1,12 +1,14 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { useServers, type SavedServer } from '../store/servers';
+import { useServers, ServerRegistrationError, type SavedServer } from '../store/servers';
 import { ApiError, serverProtocolName, type ServerProtocol } from '../api/mediaServer';
 import { IconClose, IconJellyfin, IconEmby } from './icons';
 import { ServerDetectionError } from '../api/detectServer';
 import LiquidGlass from './LiquidGlass';
+import { getClientIdentity } from '../store/settings';
 
 function errorMessage(e: unknown): string {
   if (e instanceof ServerDetectionError) return e.message;
+  if (e instanceof ServerRegistrationError) return e.message;
   if (e instanceof ApiError) {
     if (e.status === 401) return '用户名或密码错误';
     if (e.status === 404) return '服务器地址无效，请检查后重试';
@@ -23,6 +25,8 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
   const [address, setAddress] = useState(server?.address ?? '');
   const [username, setUsername] = useState(server?.userName ?? '');
   const [password, setPassword] = useState('');
+  const [registerNewDevice, setRegisterNewDevice] = useState(false);
+  const [clientName, setClientName] = useState(server?.clientName ?? getClientIdentity('emby').name);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('');
@@ -67,7 +71,9 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
     setConnectionStatus('正在自动识别服务器…');
     const onDetected = (protocol: ServerProtocol) => setConnectionStatus(`已识别 ${serverProtocolName(protocol)}，正在登录…`);
     try {
-      if (server) await updateServer(server.id, { name, address: address.trim(), username: username.trim(), password: password || undefined, onDetected });
+      if (server) await updateServer(server.id, { name, address: address.trim(), username: username.trim(),
+        password: registerNewDevice ? password : password || undefined, onDetected,
+        registerNewDevice: registerNewDevice ? { clientName } : undefined });
       else await addServer(address.trim(), username.trim(), password, name, onDetected);
       onClose();
     } catch (e) {
@@ -151,11 +157,30 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
               autoComplete="current-password"
               className={inputCls}
               type="password"
-              placeholder={server ? '留空保留登录；更换地址或用户需重新认证' : '密码（可留空）'}
+              placeholder={registerNewDevice ? '重新登录的密码；无密码账号可留空' : server ? '留空保留登录；更换地址或用户需重新认证' : '密码（可留空）'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
           </div>
+
+          {server?.protocol === 'emby' && (
+            <div className="rounded-2xl bg-white/30 p-3">
+              <label className="flex items-center gap-2 text-[12px] font-medium text-text-primary">
+                <input type="checkbox" disabled={loading} checked={registerNewDevice} onChange={e => setRegisterNewDevice(e.target.checked)} />
+                重新登记此服务器的登录设备
+              </label>
+              <p className="mt-1.5 text-[12px] leading-relaxed text-text-secondary">
+                {registerNewDevice ? '需要重新登录。新设备仅用于此服务器，保存后保持固定。' : '适用于登录正常、播放被服务器限制的连接。'}
+              </p>
+              {registerNewDevice && (
+                <div className="mt-3">
+                  <label htmlFor={`${formId}-client`} className="mb-1.5 block text-[12px] font-medium text-text-secondary">此服务器的客户端名称</label>
+                  <input id={`${formId}-client`} disabled={loading} className={inputCls} value={clientName} onChange={e => setClientName(e.target.value)} placeholder="服务器支持的客户端名称" />
+                </div>
+              )}
+              {!registerNewDevice && server.clientName && <p className="mt-1 text-[12px] text-text-secondary">此连接使用客户端名称：{server.clientName}</p>}
+            </div>
+          )}
 
           <p className="px-1 text-[12px] leading-relaxed text-text-secondary" role="status">{loading ? connectionStatus : '自动识别 Jellyfin / Emby，无需选择服务器类型'}</p>
 

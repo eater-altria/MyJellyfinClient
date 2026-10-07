@@ -3,7 +3,8 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type Event as TauriEvent, type UnlistenFn } from '@tauri-apps/api/event';
 import { useServers } from '../store/servers';
-import { useSettings } from '../store/settings';
+import { getClientIdentity, useSettings } from '../store/settings';
+import { createPlaybackDiagnostics, describePlaybackRoute, describePlaybackUrl, playbackErrorDetails } from '../player/playbackDiagnostics';
 import { getAdjacentMedia, getPlaybackPreferences, rememberTrack, saveSubtitleSearchQueries, type TrackPreference } from '../player/playbackPreferences';
 import type { BaseItem } from '../api/mediaServer';
 import { PLAYER_EXIT_EVENT } from '../player/exitPlayback';
@@ -54,6 +55,8 @@ export default function NativePlayer() {
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(true);
+  const [diagnosticPath, setDiagnosticPath] = useState<string | null>(null);
+  const [diagnosticId, setDiagnosticId] = useState('');
 
   useEffect(() => {
     if (!serverId || !itemId) return;
@@ -75,10 +78,21 @@ export default function NativePlayer() {
     usePlaybackTitle.getState().setTitle('');
 
     const api = useServers.getState().getApi(serverId);
+    const secrets = api?.token ? [api.token] : [];
+    const trace = createPlaybackDiagnostics(secrets);
+    setDiagnosticId(trace.id);
+    setDiagnosticPath(null);
+    let stage = 'prepare';
+    const identity = api?.clientIdentity() ?? getClientIdentity('jellyfin');
+    trace.record('playback.prepare', { protocol: api?.protocol, client: identity });
+    void invoke<string>('get_playback_log_path').then(path => {
+      if (!cancelled && !done) setDiagnosticPath(path);
+    }).catch(() => {});
     if (!api) {
+      trace.record('playback.failed', { stage, message: '未找到服务器' });
       setError('未找到服务器，请先添加并连接服务器');
       setStarting(false);
-      return;
+      return () => { cancelled = true; trace.record('playback.cleanup', { loaded: false, playbackRequested: false }); };
     }
 
     const reportStopped = () => {
@@ -102,6 +116,7 @@ export default function NativePlayer() {
       // effect's exit request (React StrictMode mounts effects twice in dev).
       if (cancelled || done) return;
       done = true;
+      trace.record('playback.exit', { loaded, playbackRequested });
       controller.abort();
       reportStopped();
       navigate(-1);
@@ -148,7 +163,7 @@ export default function NativePlayer() {
             finishAndBack();
           })) return;
         if (!await subscribe('mpv://request-stop', finishAndBack)) return;
-        if (!await subscribe('mpv://ready', () => { loaded = true; setStarting(false); })) return;
+        if (!await subscribe('mpv://ready', () => { loaded = true; trace.record('playback.ready'); setStarting(false); })) return;
         if (!await subscribe<{ kind: 'audio' | 'sub'; track: TrackPreference }>('mpv://track-selected', (e) => {
           const settings = useSettings.getState();
           if ((e.payload.kind === 'audio' && settings.rememberAudioTrack) || (e.payload.kind === 'sub' && settings.rememberSubtitle)) {
@@ -177,14 +192,19 @@ export default function NativePlayer() {
           } finally { switching = false; }
         })) return;
         if (!await subscribe<string>('mpv://error', (e) => {
-          setError(e.payload);
+          const details = playbackErrorDetails(e.payload, secrets);
+          trace.record('playback.mpv-error', details);
+          setError(details.message);
           setStarting(false);
           invoke('stop_playback').catch(() => {});
         })) return;
 
+        stage = 'metadata';
+        trace.record('metadata.request');
         const it = await api.getItem(itemId, controller.signal);
         if (cancelled || done) return;
         item = it;
+        trace.record('metadata.response', { type: it.Type, sourceCount: it.MediaSources?.length ?? 0 });
         const title = mediaTitle(it);
         usePlaybackTitle.getState().setTitle(title);
 
@@ -203,9 +223,12 @@ export default function NativePlayer() {
         let playSessionId: string | undefined;
 
         if (!directOk || api.protocol === 'emby') {
+          stage = 'playback-info';
+          trace.record('playback-info.request', { protocol: api.protocol });
           const info = await api.getPlaybackInfo(itemId, 'native', controller.signal);
           if (cancelled || done) return;
           source = info.MediaSources?.[0];
+          trace.record('playback-info.response', { sourceCount: info.MediaSources?.length ?? 0, errorCode: info.ErrorCode });
           if (!source) throw new Error('没有可用的媒体源');
           container = (source.Container || '').toLowerCase();
           directOk = !!(source.SupportsDirectPlay || (source.SupportsDirectStream && source.DirectStreamUrl)) && !['iso'].includes(container);
@@ -220,11 +243,19 @@ export default function NativePlayer() {
           : api.hlsUrl(itemId, source!.Id, playSessionId, source);
 
         const subFiles = api.externalSubtitleUrls(itemId, source, st.externalSubtitleRule);
+        void describePlaybackRoute(url, api.baseUrl).then(details => trace.record('media.route', details)).catch(() => {});
+        trace.record('media.selected', { playMethod: session.playMethod, container,
+          supportsDirectPlay: source?.SupportsDirectPlay, supportsDirectStream: source?.SupportsDirectStream,
+          supportsTranscoding: source?.SupportsTranscoding, subtitleCount: subFiles.length,
+          headerNames: Object.keys(source?.RequiredHttpHeaders ?? {}), stream: describePlaybackUrl(url, api.baseUrl) });
         mediaKey = `${itemId}:${source!.Id}`;
 
         playbackRequested = true;
+        stage = 'mpv-start';
+        trace.record('playback.start.request', { cacheMB: st.playerCacheSizeMB, hardwareDecode: st.preferHwDecode });
         await invoke('start_playback', {
           opts: {
+            diagnostic_id: trace.id,
             url,
             title,
             start_seconds: startTicks / 10_000_000,
@@ -245,10 +276,13 @@ export default function NativePlayer() {
             },
           },
         });
+        if (!cancelled && !done) trace.record('playback.start.accepted');
         // mpv://ready ends the loading screen when the media is actually loaded.
       } catch (e) {
         if (!cancelled && !done) {
-          setError(e instanceof Error ? e.message : String(e));
+          const details = playbackErrorDetails(e, secrets);
+          trace.record('playback.failed', { stage, ...details });
+          setError(details.message);
           setStarting(false);
         }
       }
@@ -292,6 +326,7 @@ export default function NativePlayer() {
     }, 10_000);
 
     return () => {
+      trace.record('playback.cleanup', { loaded, playbackRequested });
       cancelled = true;
       controller.abort();
       usePlaybackTitle.getState().setTitle('');
@@ -308,9 +343,13 @@ export default function NativePlayer() {
   return (
     <div className="player-surface player-native-stage relative flex h-full w-full flex-col items-center justify-center bg-black px-6 text-white/50">
       {error ? (
-        <LiquidGlass tone="dark" className="player-status-card player-error-card" role="alert">
+        <LiquidGlass tone="dark" className="player-status-card player-error-card !justify-start max-h-full overflow-y-auto" role="alert">
           <div className="text-[18px] font-medium text-white">播放失败</div>
           <div className="max-w-md text-center text-[13px] leading-relaxed text-white/70">{error}</div>
+          <div className="max-w-md break-all text-center text-[11px] leading-relaxed text-white/50 select-text">
+            <div>诊断编号：{diagnosticId}</div>
+            {diagnosticPath && <div className="mt-1">诊断日志：{diagnosticPath}</div>}
+          </div>
         </LiquidGlass>
       ) : starting ? (
         <LiquidGlass tone="dark" className="player-status-card">

@@ -1,8 +1,10 @@
-import { useState } from 'react';
-import { useSettings, AccentColor, AppSettings } from '../store/settings';
+import { useEffect, useState } from 'react';
+import { useSettings, AccentColor, AppSettings, PLAYER_CACHE_MIN_MB, PLAYER_CACHE_MAX_MB,
+  CLIENT_IDENTITY_MAX_LENGTH, CLIENT_NAME_PRESETS, DEFAULT_CLIENT_IDENTITY } from '../store/settings';
 import Toggle from '../components/Toggle';
 import LiquidGlass from '../components/LiquidGlass';
 import { isTauri } from '../platform/window';
+import type { ClientIdentity, ClientIdentityProtocol } from '../utils/clientIdentity';
 import {
   IconSettings,
   IconList,
@@ -119,6 +121,57 @@ function SelectRow<K extends keyof AppSettings>({
 
 /* ---------------- tabs ---------------- */
 
+function IdentityTextRow({ protocol, label, field, placeholder }: {
+  protocol: ClientIdentityProtocol; label: string; field: keyof ClientIdentity; placeholder: string;
+}) {
+  const value = useSettings(s => s.clientIdentities[protocol][field]);
+  const set = useSettings(s => s.setClientIdentity);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const save = () => {
+    set(protocol, field, draft);
+    setDraft(useSettings.getState().clientIdentities[protocol][field]);
+  };
+  return <Row label={label}>
+    <input aria-label={`${protocol === 'jellyfin' ? 'Jellyfin' : 'Emby'} ${label}`} value={draft} placeholder={placeholder} maxLength={CLIENT_IDENTITY_MAX_LENGTH}
+      autoComplete="off" spellCheck={false} onChange={event => setDraft(event.target.value)} onBlur={save}
+      onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); save(); } }}
+      className={`${selectCls} w-64`} />
+  </Row>;
+}
+
+function ClientIdentitySection({ protocol }: { protocol: ClientIdentityProtocol }) {
+  const name = useSettings(s => s.clientIdentities[protocol].name);
+  const set = useSettings(s => s.setClientIdentity);
+  const product = protocol === 'jellyfin' ? 'Jellyfin' : 'Emby';
+  const presets = CLIENT_NAME_PRESETS[protocol];
+  const [custom, setCustom] = useState(false);
+  const isPreset = presets.some(preset => preset === name);
+  const selected = custom || (name && !isPreset) ? 'custom' : name || 'default';
+  return <Section label={`${product} 客户端标识`}
+    footnote={`用于 ${product} 的登录与服务器鉴权，留空使用 RodelPlayer 默认标识，按回车或离开输入框保存。桌面版 HTTP User-Agent 统一采用小幻格式；这些字段仅调整鉴权标识。${protocol === 'emby' ? '重新登记连接时填写的客户端名称优先于此预设；已有设备可能保留首次登记信息。' : '预设改变后用于后续请求；服务器显示的信息可能暂时保留。'}`}>
+    <Row label="客户端预设">
+      <select aria-label={`${product} 客户端预设`} value={selected} className={`${selectCls} w-64`}
+        onChange={event => {
+          const value = event.target.value;
+          setCustom(value === 'custom');
+          if (value === 'default') {
+            set(protocol, 'name', ''); set(protocol, 'version', ''); set(protocol, 'deviceName', '');
+          } else if (presets.some(preset => preset === value)) {
+            set(protocol, 'name', value);
+          }
+        }}>
+        <option value="default">{DEFAULT_CLIENT_IDENTITY.name}（默认）</option>
+        {presets.map(preset => <option key={preset} value={preset}>{preset}</option>)}
+        <option value="custom">自定义</option>
+      </select>
+    </Row>
+    {selected === 'custom' && <IdentityTextRow protocol={protocol} label="客户端名称" field="name" placeholder={DEFAULT_CLIENT_IDENTITY.name} />}
+    <IdentityTextRow protocol={protocol} label="客户端版本" field="version" placeholder={DEFAULT_CLIENT_IDENTITY.version} />
+    <IdentityTextRow protocol={protocol} label="设备名称" field="deviceName" placeholder={DEFAULT_CLIENT_IDENTITY.deviceName} />
+  </Section>;
+}
+
 const ACCENTS: AccentColor[] = [
   '#0a84ff',
   '#30b0c7',
@@ -175,6 +228,8 @@ function GeneralTab() {
           </select>
         </Row>
       </Section>
+      <ClientIdentitySection protocol="jellyfin" />
+      <ClientIdentitySection protocol="emby" />
       <div className="mt-10 flex justify-center">
         <button
           className="glass-button px-5 py-2.5 text-[13px] text-red-600"
@@ -259,11 +314,36 @@ function InfoCard({ text }: { text: string }) {
 }
 
 function PlayTab() {
+  const cacheSize = useSettings((s) => s.playerCacheSizeMB);
+  const set = useSettings((s) => s.set);
+  const [cacheDraft, setCacheDraft] = useState(String(cacheSize));
+  useEffect(() => setCacheDraft(String(cacheSize)), [cacheSize]);
+  const saveCacheSize = () => {
+    if (cacheDraft.trim() && Number.isFinite(Number(cacheDraft))) {
+      set('playerCacheSizeMB', Number(cacheDraft));
+    }
+    setCacheDraft(String(useSettings.getState().playerCacheSizeMB));
+  };
   return (
     <div>
       <Section label="播放" footnote="可提高调节进度的时间准确度，但可能影响定位的速度">
         <ToggleRow label="从上次进度播放" field="resumeFromLastPosition" />
         <ToggleRow label="精准定位进度" field="preciseSeek" />
+      </Section>
+      <Section label="缓存" footnote={isTauri
+        ? '预读视频的缓存上限，支持 1–8192 MB，默认 150 MB。输入后按回车或离开输入框保存，下次开始播放时生效。'
+        : '缓存大小仅适用于桌面 mpv 播放器；浏览器缓存由浏览器管理。'}>
+        <Row label="缓存大小">
+          <input type="number" aria-label="缓存大小" aria-describedby="player-cache-hint"
+            min={PLAYER_CACHE_MIN_MB} max={PLAYER_CACHE_MAX_MB} step={1}
+            value={cacheDraft} disabled={!isTauri}
+            onChange={event => setCacheDraft(event.target.value)} onBlur={saveCacheSize}
+            onKeyDown={event => {
+              if (event.key === 'Enter') { event.preventDefault(); saveCacheSize(); }
+            }}
+            className={`${selectCls} w-28 text-right tabular-nums`} />
+          <span id="player-cache-hint" className="text-[12px] text-text-secondary">MB</span>
+        </Row>
       </Section>
       <Section label="快退快进" footnote="对所有用到“快退快进”的功能均生效">
         <SelectRow

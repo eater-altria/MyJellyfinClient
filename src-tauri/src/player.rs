@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
+use crate::playback_diagnostics::PlaybackTrace;
 
 #[path = "player_screenshot.rs"]
 mod screenshot;
@@ -406,24 +407,36 @@ fn write_json(file: &mut std::fs::File, value: &serde_json::Value) -> std::io::R
 /// a pending ReadFile can prevent WriteFile from completing while mpv is paused.
 /// This worker alternates writes and replies on its own connection, also draining
 /// responses so mpv's output buffer cannot fill during mouse movement.
-fn command_sender(file: std::fs::File) -> Sender<serde_json::Value> {
+fn command_sender(file: std::fs::File, trace: Option<PlaybackTrace>) -> Sender<serde_json::Value> {
     let (sender, receiver) = mpsc::channel::<serde_json::Value>();
     std::thread::spawn(move || {
         let mut reader = BufReader::new(file);
         let mut request_id = 1000_u64;
         for mut value in receiver {
+            let command = value["command"][0].as_str().unwrap_or("unknown").to_owned();
             request_id += 1;
             value["request_id"] = json!(request_id);
-            if write_json(reader.get_mut(), &value).is_err() {
+            if let Err(error) = write_json(reader.get_mut(), &value) {
+                if let Some(trace) = &trace { trace.record("mpv.command.write-failed", json!({"command": command, "message": error.to_string()})); }
                 break;
             }
             loop {
                 let mut line = String::new();
                 match reader.read_line(&mut line) {
-                    Ok(0) | Err(_) => return,
+                    Ok(0) => {
+                        if let Some(trace) = &trace { trace.record("mpv.command.channel-closed", json!({"command": command})); }
+                        return;
+                    }
+                    Err(error) => {
+                        if let Some(trace) = &trace { trace.record("mpv.command.read-failed", json!({"command": command, "message": error.to_string()})); }
+                        return;
+                    }
                     Ok(_) => {
                         if let Ok(reply) = serde_json::from_str::<serde_json::Value>(&line) {
                             if reply.get("request_id").and_then(|v| v.as_u64()) == Some(request_id) {
+                                if reply["error"] != "success" {
+                                    if let Some(trace) = &trace { trace.record("mpv.command.rejected", json!({"command": command, "error": reply["error"]})); }
+                                }
                                 break;
                             }
                         }
@@ -607,11 +620,20 @@ fn screenshot_format(settings: &serde_json::Value) -> &'static str {
     if settings["screenshotFormat"] == "png" { "png" } else { "jpg" }
 }
 
+fn player_cache_size_bytes(settings: &serde_json::Value) -> u64 {
+    let megabytes = settings["playerCacheSizeMB"].as_f64()
+        .filter(|value| value.is_finite()).unwrap_or(150.0)
+        .round().clamp(1.0, 8192.0) as u64;
+    // The settings UI uses decimal MB, so send an explicit byte count to mpv.
+    megabytes * 1_000_000
+}
+
 fn playback_setting_args(opts: &StartOptions) -> Vec<String> {
     vec![
         if opts.hw_decode { "--hwdec=auto-safe".into() } else { "--hwdec=no".into() },
         if opts.precise_seek { "--hr-seek=yes".into() } else { "--hr-seek=no".into() },
         if opts.audio_boost { "--volume-max=200".into() } else { "--volume-max=100".into() },
+        format!("--demuxer-max-bytes={}", player_cache_size_bytes(&opts.settings)),
         // gpu-next exposes HDR subtitle reference-white controls.
         "--vo=gpu-next".into(),
         if setting_bool(&opts.settings, "hdrSubtitle", true) { "--sub-hdr-peak=auto".into() } else { "--sub-hdr-peak=sdr".into() },
@@ -761,6 +783,8 @@ pub struct StartOptions {
     pub settings: serde_json::Value,
     #[serde(default)]
     pub http_headers: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    pub diagnostic_id: Option<String>,
 }
 
 /// Disable direct input on mpv's window (all input goes through the host)
@@ -954,6 +978,17 @@ pub fn start_playback(
     state: tauri::State<'_, PlayerState>,
     opts: StartOptions,
 ) -> Result<(), String> {
+    static NEXT_TRACE: AtomicU64 = AtomicU64::new(1);
+    let id = opts.diagnostic_id.clone().unwrap_or_else(|| format!("native-{}-{}", std::process::id(), NEXT_TRACE.fetch_add(1, Ordering::Relaxed)));
+    let trace = PlaybackTrace::new(&app, id, &opts.url, opts.http_headers.as_ref());
+    trace.record("native.start", json!({"networkBackend": "mpv-default", "hardwareDecode": opts.hw_decode, "cacheBytes": player_cache_size_bytes(&opts.settings),
+        "subtitleCount": opts.sub_files.len(), "headerNames": opts.http_headers.as_ref().map(|headers| headers.keys().collect::<Vec<_>>())}));
+    let result = start_playback_inner(app, state, opts, trace.clone());
+    if let Err(error) = &result { trace.record("native.start.failed", json!({"message": error})); }
+    result
+}
+
+fn start_playback_inner(app: AppHandle, state: tauri::State<'_, PlayerState>, opts: StartOptions, trace: PlaybackTrace) -> Result<(), String> {
     // Only one playback at a time
     stop_internal(&app, &state);
 
@@ -1032,22 +1067,16 @@ pub fn start_playback(
     for sub in &opts.sub_files {
         args.push(format!("--sub-file={}", sub));
     }
-    // Debug: log mpv output for diagnosing script/UI issues
-    if cfg!(debug_assertions) {
-        let directory = std::env::var_os("MJC_WEBVIEW_DATA").map(|path| std::path::PathBuf::from(path).join("player"))
-            .or_else(|| app.path().app_cache_dir().ok());
-        if let Some(directory) = directory {
-            let _ = std::fs::create_dir_all(&directory);
-            args.push(format!("--log-file={}", directory.join("mpv-player.log").display()));
-        }
-    }
-
     let pipe_path = format!("\\\\.\\pipe\\{}", pipe_name);
+    let mut spawn_attempt = 0;
     let (process, mut pipe_file) = connect_player_process(&pipe_path, Duration::from_secs(6), || {
+        spawn_attempt += 1;
+        trace.record("native.mpv.spawn", json!({"attempt": spawn_attempt, "tlsVerify": true}));
         unsafe { spawn_hosted_tracked(&mpv, &args, mpv.parent().unwrap()) }
             .map_err(|e| format!("启动播放器失败: {e}"))
     })?;
     let pid = process.pid;
+    trace.record("native.ipc.connected", json!({"pid": pid}));
     startup.process = Some(process);
 
     let mut command_file = None;
@@ -1062,7 +1091,7 @@ pub fn start_playback(
         let _ = write_json(&mut pipe_file, &json!({"command": ["quit"]}));
         "无法连接 mpv 命令通道".to_string()
     })?;
-    let pipe = command_sender(command_file);
+    let pipe = command_sender(command_file, Some(trace.clone()));
 
     let cursor_zones = Arc::new(Mutex::new(Vec::new()));
     // Attach input-forwarding data to the host window
@@ -1102,6 +1131,11 @@ pub fn start_playback(
     write_json(&mut pipe_file, &json!({"command": ["observe_property", 4, "video-params"]})).map_err(|e| e.to_string())?;
     // Initial queries
     write_json(&mut pipe_file, &json!({"command": ["get_property", "duration"], "request_id": 100})).map_err(|e| e.to_string())?;
+    // Capture human-readable warnings through IPC, then redact before writing.
+    write_json(&mut pipe_file, &json!({"command": ["request_log_messages", "warn"]})).map_err(|e| e.to_string())?;
+    write_json(&mut pipe_file, &json!({"command": ["get_property", "mpv-version"], "request_id": 101})).map_err(|e| e.to_string())?;
+    write_json(&mut pipe_file, &json!({"command": ["get_property", "options/user-agent"], "request_id": 102})).map_err(|e| e.to_string())?;
+    write_json(&mut pipe_file, &json!({"command": ["get_property", "options/curl-enabled"], "request_id": 103})).map_err(|e| e.to_string())?;
 
     if let Ok(mut st) = state.status.lock() {
         *st = PlayerStatus { active: true, position: opts.start_seconds.max(0.0), ..Default::default() };
@@ -1122,6 +1156,7 @@ pub fn start_playback(
         let screenshot_pipe = pipe_path.clone();
         let command_pipe = pipe.clone();
         let reader = BufReader::new(pipe_file);
+        let event_trace = trace.clone();
         std::thread::spawn(move || {
             let mut last_emit = Instant::now() - Duration::from_secs(2);
             for line in reader.lines() {
@@ -1134,6 +1169,7 @@ pub fn start_playback(
                 }
                 match v.get("event").and_then(|e| e.as_str()) {
                     Some("file-loaded") => {
+                        event_trace.record("mpv.file-loaded", json!({"pid": pid}));
                         let app3 = app2.clone();
                         let ready_settings = settings.clone();
                         let _ = app2.run_on_main_thread(move || {
@@ -1156,8 +1192,11 @@ pub fn start_playback(
                     }
                     Some("end-file") if v["reason"] == "error" => {
                         let message = v["file_error"].as_str().unwrap_or("视频加载失败");
+                        event_trace.record("mpv.end-file.error", json!({"reason": v["reason"], "message": message}));
                         let _ = app2.emit("mpv://error", message);
                     }
+                    Some("end-file") => event_trace.record("mpv.end-file", json!({"reason": v["reason"]})),
+                    Some("log-message") => event_trace.record("mpv.log", json!({"level": v["level"], "prefix": v["prefix"], "message": v["text"]})),
                     Some("property-change") => {
                         let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("");
                         let data = v.get("data").cloned().unwrap_or(serde_json::Value::Null);
@@ -1226,6 +1265,12 @@ pub fn start_playback(
                         }
                     }
                     _ => {
+                        match v["request_id"].as_u64() {
+                            Some(101) => event_trace.record("mpv.version", json!({"value": v["data"], "error": v["error"]})),
+                            Some(102) => event_trace.record("mpv.http-user-agent", json!({"value": v["data"], "error": v["error"]})),
+                            Some(103) => event_trace.record("mpv.network.curl-enabled", json!({"value": v["data"], "error": v["error"]})),
+                            _ => {}
+                        }
                         if v.get("request_id").and_then(|r| r.as_i64()) == Some(100) {
                             if let Some(d) = v.get("data").and_then(|d| d.as_f64()) {
                                 if let Ok(mut st) = status.lock() {
@@ -1287,6 +1332,7 @@ pub fn start_playback(
         });
     }
 
+    trace.record("mpv.load.request", json!({}));
     pipe_write(&pipe, json!({"command": ["loadfile", opts.url]}));
 
     Ok(())
@@ -1489,13 +1535,27 @@ mod tests {
     }
 
     #[test]
+    fn player_cache_size_validates_settings_and_converts_decimal_megabytes() {
+        for (value, expected) in [
+            (json!(null), 150_000_000), (json!("bad"), 150_000_000),
+            (json!(0), 1_000_000), (json!(-5), 1_000_000),
+            (json!(512), 512_000_000), (json!(512.6), 513_000_000),
+            (json!(10000), 8_192_000_000),
+        ] {
+            assert_eq!(player_cache_size_bytes(&json!({"playerCacheSizeMB": value})), expected);
+        }
+        assert_eq!(player_cache_size_bytes(&json!({})), 150_000_000);
+    }
+
+    #[test]
     fn bundled_mpv_accepts_hardware_audio_hdr_and_screenshot_settings() {
         for enabled in [true, false] {
             let opts: StartOptions = serde_json::from_value(json!({
                 "url": "fixture", "title": "fixture", "start_seconds": 0,
                 "rewind_seconds": 5, "forward_seconds": 30, "hw_decode": enabled,
                 "audio_boost": enabled, "precise_seek": enabled,
-                "settings": {"hdrSubtitle": enabled, "screenshotFormat": if enabled {"png"} else {"jpg"}, "jpegQuality": 70}
+                "settings": {"hdrSubtitle": enabled, "screenshotFormat": if enabled {"png"} else {"jpg"}, "jpegQuality": 70,
+                    "playerCacheSizeMB": if enabled {512} else {150}}
             })).unwrap();
             let mpv = mpv_exe_path().unwrap();
             let pipe_path = format!("\\\\.\\pipe\\mjc-setting-test-{}-{enabled}", std::process::id());
@@ -1519,6 +1579,9 @@ mod tests {
                 ("screenshot-format", json!(if enabled {"png"} else {"jpg"})),
                 ("screenshot-jpeg-quality", json!(70)),
                 ("hr-seek", json!(enabled)),
+                ("demuxer-max-bytes", json!(if enabled {512_000_000} else {150_000_000})),
+                ("curl-enabled", json!(true)),
+                ("tls-verify", json!(true)),
             ];
             for (index, (property, expected)) in properties.iter().enumerate() {
                 let request_id = index as u64 + 1;
@@ -1551,6 +1614,161 @@ mod tests {
         if let Some(path) = std::env::var_os("MJC_TEST_CA_EXPORT") {
             std::fs::write(path, pem).unwrap();
         }
+    }
+
+    #[test]
+    fn lavf_backend_follows_redirects_and_preserves_required_headers() {
+        use std::io::Read;
+        use std::net::TcpListener;
+        let entry = TcpListener::bind("127.0.0.1:0").unwrap();
+        let media = TcpListener::bind("127.0.0.1:0").unwrap();
+        entry.set_nonblocking(true).unwrap(); media.set_nonblocking(true).unwrap();
+        let entry_url = format!("http://{}/entry?api_key=fixture-only", entry.local_addr().unwrap());
+        let media_url = format!("http://{}/media.wav", media.local_addr().unwrap());
+        let release = Arc::new(AtomicBool::new(false));
+        let (requests_send, requests_receive) = mpsc::channel();
+        for (listener, redirect) in [(entry, Some(media_url)), (media, None)] {
+            let release = release.clone(); let requests = requests_send.clone();
+            std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !release.load(Ordering::Relaxed) && Instant::now() < deadline {
+                    if let Ok((mut stream, _)) = listener.accept() {
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+                        let mut request = Vec::new();
+                        let mut buffer = [0; 1024];
+                        while request.len() < 8192 && !request.windows(4).any(|end| end == b"\r\n\r\n") {
+                            let length = stream.read(&mut buffer).unwrap_or(0);
+                            if length == 0 { break; }
+                            request.extend_from_slice(&buffer[..length]);
+                        }
+                        let _ = requests.send(String::from_utf8_lossy(&request).into_owned());
+                        if let Some(url) = &redirect {
+                            let _ = write!(stream, "HTTP/1.1 302 Found\r\nLocation: {url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        } else {
+                            let mut wave = b"RIFF".to_vec();
+                            wave.extend_from_slice(&8036_u32.to_le_bytes()); wave.extend_from_slice(b"WAVEfmt ");
+                            wave.extend_from_slice(&16_u32.to_le_bytes()); wave.extend_from_slice(&1_u16.to_le_bytes());
+                            wave.extend_from_slice(&1_u16.to_le_bytes()); wave.extend_from_slice(&8000_u32.to_le_bytes());
+                            wave.extend_from_slice(&16000_u32.to_le_bytes()); wave.extend_from_slice(&2_u16.to_le_bytes());
+                            wave.extend_from_slice(&16_u16.to_le_bytes()); wave.extend_from_slice(b"data");
+                            wave.extend_from_slice(&8000_u32.to_le_bytes()); wave.resize(8044, 0);
+                            let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", wave.len());
+                            let _ = stream.write_all(&wave);
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            });
+        }
+        let opts: StartOptions = serde_json::from_value(json!({"url":"fixture", "title":"fixture", "start_seconds":0,
+            "rewind_seconds":15, "forward_seconds":15, "hw_decode":true, "audio_boost":false, "precise_seek":false})).unwrap();
+        let mpv = mpv_exe_path().unwrap();
+        let pipe_path = format!("\\\\.\\pipe\\mjc-lavf-redirect-test-{}", std::process::id());
+        let mut args = vec!["--no-config".into(), "--load-scripts=no".into(), "--idle=yes".into(), format!("--input-ipc-server={pipe_path}")];
+        args.extend(playback_setting_args(&opts));
+        args.extend(["--vo=null".into(), "--ao=null".into(), "--pause=yes".into(), "--tls-verify=yes".into(),
+            "--curl-enabled=no".into(),
+            "--http-header-fields-append=X-Fixture: required".into()]);
+        let pid = unsafe { spawn_hosted(&mpv, &args, mpv.parent().unwrap()) }.unwrap();
+        struct Cleanup(u32, Arc<AtomicBool>);
+        impl Drop for Cleanup { fn drop(&mut self) { self.1.store(true, Ordering::Relaxed); kill_pid(self.0); } }
+        let _cleanup = Cleanup(pid, release);
+        let mut connection = None;
+        for _ in 0..100 {
+            if let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(&pipe_path) { connection = Some(file); break; }
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        let mut events = connection.expect("Lavf mpv IPC did not start");
+        write_json(&mut events, &json!({"command":["request_log_messages","warn"]})).unwrap();
+        write_json(&mut events, &json!({"command":["loadfile", entry_url]})).unwrap();
+        let (loaded_send, loaded_receive) = mpsc::channel();
+        let errors = Arc::new(Mutex::new(Vec::<String>::new()));
+        let reader_errors = errors.clone();
+        std::thread::spawn(move || for line in BufReader::new(events).lines().map_while(Result::ok) {
+            if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) {
+                if event["event"] == "log-message" {
+                    let message = event["text"].as_str().unwrap_or("");
+                    let url_pattern = regex::Regex::new(r#"https?://[^\s"'<>]+"#).unwrap();
+                    reader_errors.lock().unwrap().push(url_pattern.replace_all(message, "[URL redacted]").into_owned());
+                }
+                if event["event"] == "file-loaded" { let _ = loaded_send.send(true); }
+                if event["event"] == "end-file" && event["reason"] == "error" { let _ = loaded_send.send(false); }
+            }
+        });
+        assert!(loaded_receive.recv_timeout(Duration::from_secs(5)).expect("Lavf redirect did not resolve"), "Lavf failed to read redirected media: {:?}", errors.lock().unwrap());
+        let first = requests_receive.recv_timeout(Duration::from_secs(1)).unwrap();
+        let second = requests_receive.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(first.contains("/entry?api_key=fixture-only"));
+        assert!(second.contains("/media.wav") && !second.contains("fixture-only"), "Do not add the original URL's API key to another origin");
+        for request in [first, second] { assert!(request.to_ascii_lowercase().contains("x-fixture: required"), "Server-required headers were dropped"); }
+    }
+
+    #[test]
+    fn bundled_mpv_emits_redacted_http_failure_diagnostics() {
+        use std::io::Read;
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let secret = "fixture-diagnostic-token";
+        let url = format!("http://{}/stream.mp4?api_key={secret}", listener.local_addr().unwrap());
+        let release = Arc::new(AtomicBool::new(false));
+        let server_release = release.clone();
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !server_release.load(Ordering::Relaxed) && Instant::now() < deadline {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+                    let mut request = [0; 4096];
+                    let _ = stream.read(&mut request);
+                    let _ = stream.write_all(b"HTTP/1.1 522 Origin Unreachable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        let mpv = mpv_exe_path().unwrap();
+        let pipe_path = format!("\\\\.\\pipe\\mjc-diagnostic-http-test-{}", std::process::id());
+        let args = vec!["--no-config".into(), "--load-scripts=no".into(), "--idle=yes".into(),
+            "--vo=null".into(), "--ao=null".into(), format!("--input-ipc-server={pipe_path}")];
+        let pid = unsafe { spawn_hosted(&mpv, &args, mpv.parent().unwrap()) }.unwrap();
+        struct Cleanup(u32, Arc<AtomicBool>);
+        impl Drop for Cleanup { fn drop(&mut self) { self.1.store(true, Ordering::Relaxed); kill_pid(self.0); } }
+        let _cleanup = Cleanup(pid, release);
+        let connect = || {
+            for _ in 0..100 {
+                if let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(&pipe_path) { return file; }
+                std::thread::sleep(Duration::from_millis(30));
+            }
+            panic!("mpv diagnostic IPC did not start");
+        };
+        let mut events = connect();
+        write_json(&mut events, &json!({"command":["request_log_messages","warn"]})).unwrap();
+        let (sender, receiver) = mpsc::sync_channel(128);
+        let trace = PlaybackTrace::fixture(sender, vec![secret.into()]);
+        let event_trace = trace.clone();
+        std::thread::spawn(move || for line in BufReader::new(events).lines().map_while(Result::ok) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+                if value["event"] == "log-message" {
+                    event_trace.record("mpv.log", json!({"message":value["text"],"prefix":value["prefix"]}));
+                } else if value["event"] == "end-file" {
+                    event_trace.record("mpv.end-file", json!({"reason":value["reason"]}));
+                }
+            }
+        });
+        let commands = command_sender(connect(), Some(trace));
+        pipe_write(&commands, json!({"command":["loadfile",url]}));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut saw_http_status = false;
+        let mut saw_media_error = false;
+        while Instant::now() < deadline && !(saw_http_status && saw_media_error) {
+            if let Ok(entry) = receiver.recv_timeout(Duration::from_millis(200)) {
+                let safe = entry.to_string();
+                assert!(!safe.contains(secret) && !safe.contains("http://"), "diagnostic sanitization failed");
+                saw_http_status |= safe.contains("522");
+                saw_media_error |= entry["stage"] == "mpv.end-file" && entry["details"]["reason"] == "error";
+            }
+        }
+        assert!(saw_http_status, "mpv must expose HTTP 522 through warning/error IPC events");
+        assert!(saw_media_error, "mpv must correlate failed loading with end-file/error");
     }
 
     #[test]
@@ -1596,7 +1814,7 @@ mod tests {
             panic!("mpv pipe did not start");
         };
         let events = connect();
-        let commands = command_sender(connect());
+        let commands = command_sender(connect(), None);
         let (loaded_send, loaded_receive) = mpsc::channel();
         std::thread::spawn(move || {
             for line in BufReader::new(events).lines().map_while(Result::ok) {
@@ -1651,7 +1869,7 @@ mod tests {
             panic!("mpv pipe did not start");
         };
         let mut events = connect();
-        let commands = command_sender(connect());
+        let commands = command_sender(connect(), None);
         write_json(&mut events, &json!({"command": ["observe_property", 1, "pause"]})).unwrap();
         let (send, receive) = mpsc::channel();
         let (message_send, message_receive) = mpsc::channel();

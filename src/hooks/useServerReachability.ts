@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { MediaServerApi, type ServerProtocol } from '../api/mediaServer';
 import { useServers } from '../store/servers';
+import { getClientIdentity } from '../store/settings';
 
 const INTERVAL_MS = 30_000;
 const TIMEOUT_MS = 5_000;
@@ -25,7 +26,9 @@ export function useServerReachability() {
           let reachable = false;
           try {
             const saved = useServers.getState().servers.find((s) => s.id === id && s.address === address);
-            const info = await new MediaServerApi(address, saved?.token, saved?.userId, protocol).getPublicSystemInfo(controller.signal);
+            const api = saved ? useServers.getState().getApi(id) : null;
+            const info = await (api ?? new MediaServerApi(address, saved?.token, saved?.userId, protocol,
+              () => getClientIdentity(protocol ?? 'jellyfin'))).getPublicSystemInfo(controller.signal);
             // A proxy returning an unrelated JSON page is not a supported media server.
             reachable = !!(info.Id || info.ServerName || info.Version);
           } catch {
