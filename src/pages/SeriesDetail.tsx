@@ -11,6 +11,7 @@ import CastRow from '../components/CastRow';
 import EpisodeRow from '../components/EpisodeRow';
 import ListNavigation from '../components/ListNavigation';
 import LiquidGlass from '../components/LiquidGlass';
+import MediaDetailHeader from '../components/MediaDetailHeader';
 import { Spinner, EmptyState, ErrorState } from '../components/Feedback';
 import { IconChevronLeft, IconHome, IconPlay, IconHeart, IconCheck } from '../components/icons';
 
@@ -221,15 +222,10 @@ export default function SeriesDetailPage() {
         <ErrorState message={error} onRetry={() => setTick((t) => t + 1)} />
       ) : item ? (
         <div className="pt-2">
-          <LiquidGlass intensity="subtle" className="max-w-4xl rounded-[28px] p-6 sm:p-7">
-          {logo ? (
-            <img src={logo} alt={item.Name} className="max-h-28 max-w-full object-contain sm:max-w-md" draggable={false} />
-          ) : (
-            <h1 className="break-words text-3xl font-semibold tracking-tight text-text-primary sm:text-4xl">{item.Name}</h1>
-          )}
+          <MediaDetailHeader key={`${serverId}:${item.Id}`} title={item.Name} logoUrl={logo}>
 
           {/* Action row */}
-          <div className="mt-5 flex flex-wrap items-center gap-2.5">
+          <div className="detail-action-row mt-5 flex flex-wrap items-center gap-2.5">
             <button
               onClick={togglePlayed}
               title={played ? '标记未看' : '标记已看'}
@@ -293,7 +289,7 @@ export default function SeriesDetailPage() {
             </p>
           )}
 
-          </LiquidGlass>
+          </MediaDetailHeader>
 
           {/* Season selector + episodes */}
           {seasons.length > 0 && (

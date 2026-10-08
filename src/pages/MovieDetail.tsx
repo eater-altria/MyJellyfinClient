@@ -15,6 +15,7 @@ import PosterCard from '../components/PosterCard';
 import CastRow from '../components/CastRow';
 import MediaInfo from '../components/MediaInfo';
 import LiquidGlass from '../components/LiquidGlass';
+import MediaDetailHeader from '../components/MediaDetailHeader';
 import { Spinner, EmptyState, ErrorState } from '../components/Feedback';
 import { IconChevronLeft, IconHome, IconPlay, IconHeart, IconCheck } from '../components/icons';
 
@@ -163,12 +164,7 @@ export default function MovieDetailPage() {
         <ErrorState message={error} onRetry={() => setTick((t) => t + 1)} />
       ) : item ? (
         <div className="pt-2">
-          <LiquidGlass intensity="subtle" className="max-w-4xl rounded-[28px] p-6 sm:p-7">
-          {logo ? (
-            <img src={logo} alt={item.Name} className="max-h-28 max-w-full object-contain sm:max-w-md" draggable={false} />
-          ) : (
-            <h1 className="break-words text-3xl font-semibold tracking-tight text-text-primary sm:text-4xl">{item.Name}</h1>
-          )}
+          <MediaDetailHeader key={`${serverId}:${item.Id}`} title={item.Name} logoUrl={logo}>
 
           {isEpisode && <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px] text-gray-500">
             {item.SeriesId && <Link to={`/server/${serverId}/series/${item.SeriesId}`} className="text-accent hover:underline">{item.SeriesName ?? '返回剧集'}</Link>}
@@ -177,7 +173,7 @@ export default function MovieDetailPage() {
           </div>}
 
           {/* Action row */}
-          <div className="mt-5 flex flex-wrap items-center gap-2.5">
+          <div className="detail-action-row mt-5 flex flex-wrap items-center gap-2.5">
             <button
               onClick={togglePlayed}
               title={played ? '标记未看' : '标记已看'}
@@ -232,7 +228,7 @@ export default function MovieDetailPage() {
             </p>
           )}
 
-          </LiquidGlass>
+          </MediaDetailHeader>
 
           {/* Cast */}
           {item.People && item.People.length > 0 && (

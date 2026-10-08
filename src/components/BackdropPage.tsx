@@ -16,9 +16,9 @@ export default function BackdropPage({
   children: React.ReactNode;
   header?: React.ReactNode;
 }) {
-  const bg = item ? api.backdropUrl(item, 1920) : null;
   const location = useLocation();
   const showPreviewImage = useSettings((settings) => settings.showPreviewImage);
+  const bg = showPreviewImage && item ? api.backdropUrl(item, 1920) : null;
   const backdropOwner = useRef({});
 
   useEffect(() => {

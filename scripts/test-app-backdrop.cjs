@@ -189,7 +189,10 @@ try {
   assert(artworkCalls.every(call => call.maxWidth === 1920), 'Ambient publication must retain the detail backdrop resolution');
 
   showPreviewImage = false;
-  renderDetail(secondItem);
+  const beforeDisabledArtworkCalls = artworkCalls.length;
+  detail = renderDetail(secondItem);
+  assert.equal(findImages(detail).length, 0, 'Disabling previews must also remove the detail cover image');
+  assert.equal(artworkCalls.length, beforeDisabledArtworkCalls, 'Disabled previews must not resolve an artwork URL');
   assert.equal(store.getState().source, null, 'Disabling previews must release detail ambient artwork');
   showPreviewImage = true;
   renderDetail(secondItem);
