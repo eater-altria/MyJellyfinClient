@@ -1,20 +1,24 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { BaseItem } from '../api/mediaServer';
 import { useServers } from '../store/servers';
 import { useSettings } from '../store/settings';
+import { useAppBackdrop } from '../store/appBackdrop';
 import { orderMediaItems } from '../utils/listPresentation';
 import CastRow from '../components/CastRow';
 import PosterCard from '../components/PosterCard';
+import EpisodeRow from '../components/EpisodeRow';
 import LiquidGlass from '../components/LiquidGlass';
 import { EmptyState, ErrorState, Spinner } from '../components/Feedback';
 import { IconChevronLeft } from '../components/icons';
 
-/** Full cast, recommendations, or a person's complete paginated filmography. */
-export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 'person' }) {
-  const { serverId, itemId, personId } = useParams();
+/** Full cast, recommendations, season episodes, or a person's paginated filmography. */
+export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 'person' | 'episodes' }) {
+  const { serverId, itemId, personId, seasonId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const showCount = useSettings((settings) => settings.showItemCountInTitle);
+  const showPreviewImage = useSettings((settings) => settings.showPreviewImage);
   const foldersFirst = useSettings((settings) => settings.sortFoldersSeparately);
   const api = useMemo(() => useServers.getState().getApi(serverId), [serverId]);
   const [source, setSource] = useState<BaseItem | null>(null);
@@ -25,9 +29,28 @@ export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 
   const [error, setError] = useState('');
   const [moreError, setMoreError] = useState('');
   const [retry, setRetry] = useState(0);
+  const backdropOwner = useRef({});
+  const backdropScope = kind === 'person' ? null : `/server/${serverId}/item/${itemId}`;
+  // Capture the parent's artwork during render, before its unmount cleanup releases ownership.
+  const [inheritedBackdrop] = useState(() => {
+    const current = useAppBackdrop.getState().source;
+    const parentRoutes = ['series', 'movie', 'episode'].map(type => `/server/${serverId}/${type}/${itemId}`);
+    return backdropScope && current && parentRoutes.includes(current.route)
+      ? { scope: backdropScope, url: current.url } : null;
+  });
+  const [backdropItem, setBackdropItem] = useState<{ scope: string; item: BaseItem } | null>(null);
+  const backdropUrl = inheritedBackdrop?.scope === backdropScope ? inheritedBackdrop.url
+    : api && backdropItem?.scope === backdropScope ? api.backdropUrl(backdropItem.item, 1920) : null;
+
+  useEffect(() => {
+    const owner = backdropOwner.current;
+    useAppBackdrop.getState().setBackdrop(owner, location.pathname, showPreviewImage ? backdropUrl : null);
+    return () => useAppBackdrop.getState().clearBackdrop(owner);
+  }, [backdropUrl, location.pathname, showPreviewImage]);
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setSource(null);
     setItems([]);
     setTotal(0);
@@ -37,24 +60,33 @@ export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 
     setMoreError('');
     (async () => {
       if (!api) throw new Error('服务器不可用，请重新连接服务器');
-      const id = kind === 'person' ? personId : itemId;
+      const id = kind === 'person' ? personId : kind === 'episodes' ? seasonId : itemId;
       if (!id) throw new Error('缺少详情 ID');
+      if (kind === 'episodes' && !itemId) throw new Error('缺少剧集 ID');
+      if (kind === 'episodes' && itemId && backdropScope && inheritedBackdrop?.scope !== backdropScope) {
+        // Direct links can recover the series artwork independently of the season grid request.
+        api.getItem(itemId, controller.signal).then((parent) => {
+          if (!cancelled) setBackdropItem({ scope: backdropScope, item: parent });
+        }).catch(() => {});
+      }
       const [detail, result] = await Promise.all([
-        api.getItem(id),
+        api.getItem(id, controller.signal),
         kind === 'person' ? api.getPersonItems(id) :
-          kind === 'similar' ? api.getSimilar(id, null) : Promise.resolve(null),
+          kind === 'similar' ? api.getSimilar(id, null) :
+            kind === 'episodes' ? api.getEpisodes(itemId!, seasonId, controller.signal) : Promise.resolve(null),
       ]);
       if (cancelled) return;
       setSource(detail);
+      if (kind !== 'episodes' && backdropScope) setBackdropItem({ scope: backdropScope, item: detail });
       setItems(result?.Items ?? []);
-      setTotal(result?.TotalRecordCount ?? detail.People?.length ?? 0);
+      setTotal(result?.TotalRecordCount ?? result?.Items.length ?? detail.People?.length ?? 0);
     })().catch((e) => {
       if (!cancelled) setError(String(e));
     }).finally(() => {
       if (!cancelled) setLoading(false);
     });
-    return () => { cancelled = true; };
-  }, [api, itemId, personId, kind, retry]);
+    return () => { cancelled = true; controller.abort(); };
+  }, [api, itemId, personId, seasonId, kind, retry, backdropScope, inheritedBackdrop?.scope]);
 
   // A separate effect cancels pagination responses when navigating to another person.
   useEffect(() => {
@@ -74,7 +106,7 @@ export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, personId, kind, loadingMore]);
 
-  const title = kind === 'cast' ? '演职人员' : kind === 'similar' ? '类似作品' : '参演及参与作品';
+  const title = kind === 'cast' ? '演职人员' : kind === 'similar' ? '类似作品' : kind === 'episodes' ? '全部剧集' : '参演及参与作品';
   const openItem = (item: BaseItem) => {
     if (item.Type === 'Episode') navigate(`/server/${serverId}/episode/${item.Id}`);
     else navigate(`/server/${serverId}/${item.Type === 'Series' ? 'series' : 'movie'}/${item.Id}`);
@@ -102,6 +134,9 @@ export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 
           )}
           {kind === 'cast' ? (
             <CastRow api={api} people={source.People ?? []} grid onPersonClick={(person) => navigate(`/server/${serverId}/person/${person.Id}`)} />
+          ) : kind === 'episodes' ? (
+            items.length ? <div className="mt-6"><EpisodeRow api={api} episodes={items} serverId={serverId!} grid /></div>
+              : <EmptyState title="本季暂无剧集" hint="服务器中暂无可显示的剧集。" />
           ) : items.length ? (
             <div className="mt-6 flex flex-wrap gap-x-5 gap-y-6">
               {orderMediaItems(items, foldersFirst).map((item) => <PosterCard key={item.Id} api={api} item={item} onClick={() => openItem(item)} />)}

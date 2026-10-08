@@ -139,6 +139,7 @@ const server = http.createServer(async (req,res) => {
     assert.equal((await api.getItem('movie')).MediaSources[0].MediaStreams[0].Codec,'hevc');
     await api.getLatest('library');await api.getResumeItems();await api.getNextUp();await api.queryItems({StartIndex:60});
     await api.getSeasons('series');await api.getEpisodes('series','season');await api.getSimilar('movie');
+    await assert.rejects(api.getEpisodes('series','season',controller.signal),{name:'AbortError'},'Episode requests must forward cancellation in both protocols');
     await api.getPersonItems('person');await api.search('fixture');await api.getPlayedItems();
     const playback=await api.getPlaybackInfo('movie','native');assert.equal(playback.PlaySessionId,'session');
     const request=calls.at(-1);assert.equal(request.body.DeviceProfile.Name,DEFAULT_CLIENT_IDENTITY.name+' mpv');

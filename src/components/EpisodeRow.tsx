@@ -1,16 +1,20 @@
+import { forwardRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BaseItem, MediaServerApi } from '../api/mediaServer';
 import PosterCard from './PosterCard';
 
 /** Episode cards share preview, progress and metadata preferences with every other media list. */
-export default function EpisodeRow({ api, episodes, serverId }: {
+const EpisodeRow = forwardRef<HTMLDivElement, {
   api: MediaServerApi;
   episodes: BaseItem[];
   serverId: string;
-}) {
+  grid?: boolean;
+}>(function EpisodeRow({ api, episodes, serverId, grid = false }, ref) {
   const navigate = useNavigate();
   return (
-    <div className="flex gap-4 overflow-x-auto pb-3 pt-1" style={{ scrollbarWidth: 'none' }}>
+    <div ref={ref} tabIndex={grid ? undefined : 0} aria-label="剧集列表"
+      className={grid ? 'flex flex-wrap gap-x-5 gap-y-6' : 'flex gap-4 overflow-x-auto pb-3 pt-1'}
+      style={grid ? undefined : { scrollbarWidth: 'none' }}>
       {episodes.map((episode) => (
         <PosterCard
           key={episode.Id}
@@ -26,4 +30,6 @@ export default function EpisodeRow({ api, episodes, serverId }: {
       ))}
     </div>
   );
-}
+});
+
+export default EpisodeRow;

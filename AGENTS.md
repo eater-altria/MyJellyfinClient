@@ -95,6 +95,8 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
    公共识别接口跨域重定向时保留用户选择的入口，不将元数据域名保存为媒体服务器地址；同域前缀重定向和同主机默认端口的 HTTP→HTTPS 升级仍可采用。Emby 根接口识别成功后优先验证原入口下同一服务器 ID 的 `/emby` 或 `/mediabrowser` 前缀，未提供有效前缀时保留根接口。旧连接需重新编辑并登录才能重新识别保存入口，不按猜测批量改写已有连接。
 8. 章节预览使用服务器已有章节图片；缺少图片时回退到服务器封面，不为列表下载完整视频。索引图片使用兼容两种协议的路径形式。
 9. 取消数量上限不意味着一次渲染/下载全部轮播背景；当前轮播按需挂载临近图片，全部已加载项目仍可导航。
+   剧集详情的季选择器右侧提供查看全部及左右滚动，查看全部进入所选季的完整剧集网格；季选择通过 `seasonId` 查询参数保留，返回时恢复。横向行与网格共用 `EpisodeRow` 的单集详情跳转和显示偏好，剧集请求失败保留重试。
+   剧集、演职人员与类似作品的查看全部页继承外层媒体封面的临时应用背景，直接打开剧集网格时补取所属剧集背景；不持久化图片 URL，保留预览开关、路由/实例隔离与离开清理。
 10. 「设置 → 通用」分别配置 Jellyfin 和 Emby 客户端标识：对应产品的常用名称下拉、自定义名称、版本和设备名称存储于 `clientIdentities`。空值使用共享 `defaultClientIdentity.json` 的 RodelPlayer、2.2610.12.0 及 Windows PC 兼容标识；保留手动设置，各自的默认项只恢复对应产品三项。按实际服务器协议读取标识，登录、缓存/重建的 API 实例和连通性探测共用；尚未知产品的公开探测尝试两套不同标识，不发送账号、令牌或密码，网络/JSON 失败不重复等待同一端点。鉴权字段按 URL 编码，保留稳定的设备 ID；播放协商名称随客户端名称变化，但媒体能力仍按实际播放器生成。桌面 WebView 创建时设置真实 HTTP User-Agent 为同一共享名称/版本，并追加只读查询的实际 Windows NT 版本、构建号和架构，覆盖首次登录及其他 WebView HTTP 请求；设置页字段仅影响鉴权标识，不改变这一固定 UA。纯浏览器开发模式仍使用浏览器 UA，mpv 视频请求仍沿用原有 UA。不向外部图片/媒体 URL 附加本站鉴权标识或令牌；WebView UA 只含公开兼容名称/版本与平台信息。
 11. 已识别服务器的 `Authorization` 和 `X-Emby-Authorization` 必须使用同一协议前缀：Emby 使用 `Emby`，Jellyfin 使用 `MediaBrowser`。账号密码通过 `/Users/AuthenticateByName` 的 `Username` / `Pw` 换取服务器返回的 `AccessToken`，原样按服务器保存；客户端不生成、散列或跨应用借用令牌，也不为刷新令牌擅自重置持久设备 ID。
 12. 编辑 Emby 连接可显式勾选「重新登记此服务器的登录设备」，并填写该连接的客户端名称、重新输入密码。仅该连接生成新的 `deviceId`，成功登录后与 `clientName` 一起保存；失败保留原连接。之后登录、缓存/重建 API、播放协商和流 URL 共用此固定 ID，客户端名称优先使用连接的覆盖值，版本及设备名称仍来自对应产品设置。其他连接和原有全局设备 ID 保持稳定；普通删除、添加、编辑和重新登录不自动重置设备身份。该选项用于服务端按首次设备登记限制播放的兼容情况，不应自动替用户选择客户端名称。
@@ -165,6 +167,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 
 `test:ui` 中的玻璃按钮回归使用真实 React 与无头 Chromium 验证原生点击、禁用、ref、表单类型、事件透传和列表导航。默认查找本机 Chrome / Edge，可用 `MJC_TEST_CHROMIUM` 指定可信浏览器路径；测试只用合成页面与独立临时 profile，不使用用户浏览器账号或访问服务器，结束后清理经过路径校验的临时目录。
 搜索页布局回归同样使用真实 React 与 Chromium，测量默认空状态、加载、无结果、错误、清空和未选择服务器时的滚动高度，并验证普通/窄窗口中结果列表可滚动到最后一项。
+剧集导航回归验证真实左右滚动、切季重置、当前季完整网格、单集详情跳转与返回、加载/空数据/重试、取消和迟到响应、季下拉、继承/直接打开的封面背景与预览开关，以及普通/窄窗口和 100% / 125% / 150% DPI 的控件布局。
 
 若受限执行环境无法读取构建工具目录或系统临时目录，应区分权限问题和代码问题。必要时为本次验证指定可写的临时目录，不能据此改坏用户正常构建配置；不要在敏感输出中打印令牌。
 
@@ -174,6 +177,8 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 - 提交前检查差异、相关测试、忽略规则和私密数据。提交、推送和 Release 按用户授权执行；成功必须以远程实际状态验证，网络失败不能报告已推送。
 - 当前仓库使用本地 `gh`。Git TLS 握手失败时可重试或检查连接，不要关闭证书校验。
 - 打包使用 `./scripts/build-tauri.ps1`；默认 x64 MSVC 的 NSIS 输出在 `src-tauri/target/release/bundle/nsis/`。
+- 安装包构建后可运行 `./scripts/build-portable.ps1`，生成 `src-tauri/target/release/bundle/portable/` 下的单 EXE 便携版。复用 Tauri 缓存的 NSIS，检查主程序版本/x64 架构和完整资源，按显式清单嵌入程序、mpv EXE/COM/DLL、控制脚本、shader 及 WebView2Loader；不递归打包开发数据或缓存。编译/签名成功才替换输出，工作区 `.tmp/portable-build-*` 在结束时按范围校验清理。
+- 便携启动器以当前用户权限解包到 NSIS 独立临时目录，等待主程序退出后清理；不写安装注册表或快捷方式，不安装 WebView2 Runtime。账号、设置、截图和诊断位于 EXE 旁的 `MyJellyfinClient-data/`，通过子进程 `MJC_WEBVIEW_DATA` 统一指定，属于用户持久数据；只读目录明确失败，不偷偷改用安装版或开发版账号。Windows PowerShell 5.1 的 `scripts/test-portable.ps1` 使用合成 x64 程序和实际 NSIS，验证完整资源、缓存排除、Unicode/空格路径、退出码、连续启动数据保持、临时清理和缺失资源/错误架构的失败保护。
 - `scripts/sign.ps1` 显式加载当前 PowerShell 自带的 Security 模块，兼容 Node/Tauri 启动 Windows PowerShell 时继承其他 PowerShell 的模块路径；可使用已有本机开发证书，但这不等于所有用户机器都信任它。`make-dev-cert.ps1` 会修改证书库，不应作为普通构建步骤自动运行。
 - `build-tauri.ps1` 先签名 mpv 运行资源；Tauri 的 `bundle.windows.signCommand` 调用 `sign.ps1 -Paths`，在二进制补丁之后、压入安装包之前签名程序，并签名卸载程序与最终安装包。不要恢复只在打包完成后签名源码目录程序的流程；保留已有有效签名，未找到开发证书时跳过，签名失败时终止构建。
 - 发布前核对源码提交、版本、程序架构、包内 mpv/控制脚本/shader 和附件 SHA-256。版本定义位于 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`，Cargo 锁文件中的本项目版本也需一致。

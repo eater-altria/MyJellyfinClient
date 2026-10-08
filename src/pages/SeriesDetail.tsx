@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { BaseItem, formatTime, ticksToSeconds } from '../api/mediaServer';
 import { useServers } from '../store/servers';
 import { useSettings } from '../store/settings';
@@ -9,6 +9,7 @@ import SectionRow from '../components/SectionRow';
 import PosterCard from '../components/PosterCard';
 import CastRow from '../components/CastRow';
 import EpisodeRow from '../components/EpisodeRow';
+import ListNavigation from '../components/ListNavigation';
 import LiquidGlass from '../components/LiquidGlass';
 import { Spinner, EmptyState, ErrorState } from '../components/Feedback';
 import { IconChevronLeft, IconHome, IconPlay, IconHeart, IconCheck } from '../components/icons';
@@ -16,6 +17,7 @@ import { IconChevronLeft, IconHome, IconPlay, IconHeart, IconCheck } from '../co
 export default function SeriesDetailPage() {
   const { serverId, itemId } = useParams<{ serverId: string; itemId: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const showCount = useSettings((settings) => settings.showItemCountInTitle);
   const showFolderTime = useSettings((settings) => settings.showFolderTime);
   const foldersFirst = useSettings((settings) => settings.sortFoldersSeparately);
@@ -29,9 +31,14 @@ export default function SeriesDetailPage() {
   const [tick, setTick] = useState(0);
 
   const [seasons, setSeasons] = useState<BaseItem[]>([]);
-  const [seasonId, setSeasonId] = useState<string | null>(null);
+  const selectedSeason = seasons.find((season) => season.Id === searchParams.get('seasonId'))
+    ?? seasons.find((season) => season.IndexNumber !== 0) ?? seasons[0];
+  const seasonId = selectedSeason?.Id;
   const [episodes, setEpisodes] = useState<BaseItem[]>([]);
   const [episodesLoading, setEpisodesLoading] = useState(false);
+  const [episodesError, setEpisodesError] = useState('');
+  const [episodesRetry, setEpisodesRetry] = useState(0);
+  const episodeScroller = useRef<HTMLDivElement>(null);
   const [nextEp, setNextEp] = useState<BaseItem | null>(null);
 
   // Load series item + similar
@@ -42,7 +49,6 @@ export default function SeriesDetailPage() {
     setError(null);
     setNextEp(null);
     setSeasons([]);
-    setSeasonId(null);
     setEpisodes([]);
     (async () => {
       const it = await api.getItem(itemId);
@@ -75,8 +81,6 @@ export default function SeriesDetailPage() {
       if (cancelled) return;
       const list = res.Items ?? [];
       setSeasons(list);
-      const def = list.find((s) => s.IndexNumber !== 0) ?? list[0];
-      if (def) setSeasonId(def.Id);
     })().catch(() => {});
     return () => {
       cancelled = true;
@@ -87,9 +91,12 @@ export default function SeriesDetailPage() {
   useEffect(() => {
     if (!api || !itemId || !seasonId) return;
     let cancelled = false;
+    const controller = new AbortController();
     setEpisodesLoading(true);
+    setEpisodes([]);
+    setEpisodesError('');
     (async () => {
-      const res = await api.getEpisodes(itemId, seasonId);
+      const res = await api.getEpisodes(itemId, seasonId, controller.signal);
       if (cancelled) return;
       const eps = res.Items ?? [];
       setEpisodes(eps);
@@ -103,15 +110,16 @@ export default function SeriesDetailPage() {
       );
     })()
       .catch(() => {
-        if (!cancelled) setEpisodes([]);
+        if (!cancelled) setEpisodesError('本季剧集加载失败，请重试。');
       })
       .finally(() => {
         if (!cancelled) setEpisodesLoading(false);
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [api, itemId, seasonId]);
+  }, [api, itemId, seasonId, episodesRetry]);
 
   if (!api) {
     return (
@@ -199,6 +207,12 @@ export default function SeriesDetailPage() {
     return `${label}${showCount && s.ChildCount != null ? `（${s.ChildCount}）` : ''}${date ? ` · ${date}` : ''}`;
   };
 
+  const selectSeason = (id: string) => {
+    const params = new URLSearchParams(searchParams);
+    params.set('seasonId', id);
+    setSearchParams(params, { replace: true });
+  };
+
   return (
     <BackdropPage api={api} item={item} header={header}>
       {loading ? (
@@ -284,41 +298,48 @@ export default function SeriesDetailPage() {
           {/* Season selector + episodes */}
           {seasons.length > 0 && (
             <section className="mt-8">
-              <div className="mb-4 flex flex-wrap items-center gap-2">
-                {seasons.length <= 6 ? (
-                  seasons.map((s) => (
-                    <button
-                      key={s.Id}
-                      onClick={() => setSeasonId(s.Id)}
-                      aria-pressed={s.Id === seasonId}
-                      className={`glass-button px-4 py-2 text-[13px] ${
-                        s.Id === seasonId
-                          ? 'bg-accent text-white'
-                          : 'text-text-secondary'
-                      }`}
-                    >
-                      {seasonLabel(s)}
-                    </button>
-                  ))
-                ) : (
-                  <select
-                    value={seasonId ?? ''}
-                    aria-label="选择季"
-                    onChange={(e) => setSeasonId(e.target.value)}
-                    className="glass-input max-w-full px-4 py-2 text-[13px] text-text-primary"
-                  >
-                    {seasons.map((s) => (
-                      <option key={s.Id} value={s.Id}>
+              <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-3">
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                  {seasons.length <= 6 ? (
+                    seasons.map((s) => (
+                      <button
+                        key={s.Id}
+                        onClick={() => selectSeason(s.Id)}
+                        aria-pressed={s.Id === seasonId}
+                        className={`glass-button max-w-full break-words px-4 py-2 text-[13px] ${
+                          s.Id === seasonId
+                            ? 'bg-accent text-white'
+                            : 'text-text-secondary'
+                        }`}
+                      >
                         {seasonLabel(s)}
-                      </option>
-                    ))}
-                  </select>
-                )}
+                      </button>
+                    ))
+                  ) : (
+                    <select
+                      value={seasonId ?? ''}
+                      aria-label="选择季"
+                      onChange={(e) => selectSeason(e.target.value)}
+                      className="glass-input max-w-full px-4 py-2 text-[13px] text-text-primary"
+                    >
+                      {seasons.map((s) => (
+                        <option key={s.Id} value={s.Id}>
+                          {seasonLabel(s)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+                <ListNavigation title="剧集" scroller={episodeScroller} alwaysShowArrows
+                  scrollDisabled={episodesLoading || episodes.length === 0}
+                  onMore={seasonId ? () => navigate(`/server/${serverId}/series/${item.Id}/season/${seasonId}/episodes`) : undefined} />
               </div>
               {episodesLoading ? (
                 <Spinner />
+              ) : episodesError ? (
+                <ErrorState message={episodesError} onRetry={() => setEpisodesRetry((value) => value + 1)} />
               ) : episodes.length > 0 ? (
-                <EpisodeRow api={api} episodes={episodes} serverId={serverId!} />
+                <EpisodeRow key={`${itemId}:${seasonId}`} ref={episodeScroller} api={api} episodes={episodes} serverId={serverId!} />
               ) : (
                 <div className="py-6 text-[12px] text-gray-400">本季暂无剧集</div>
               )}

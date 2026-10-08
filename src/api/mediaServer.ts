@@ -365,12 +365,12 @@ export class MediaServerApi {
     });
   }
 
-  getEpisodes(seriesId: string, seasonId?: string): Promise<ItemsResult> {
+  getEpisodes(seriesId: string, seasonId?: string, signal?: AbortSignal): Promise<ItemsResult> {
     return this.get(`/Shows/${seriesId}/Episodes`, {
       UserId: this.userId,
       SeasonId: seasonId,
       Fields: LIST_ITEM_FIELDS,
-    });
+    }, signal);
   }
 
   getSimilar(itemId: string, limit: number | null = 12): Promise<ItemsResult> {

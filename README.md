@@ -60,6 +60,7 @@ npm run dev:web         # 仅浏览器中调试前端 (http://localhost:5173，�
 
 ```bash
 scripts\build-tauri.ps1  # 产出 NSIS 安装包 (src-tauri/target/release/bundle/)
+scripts\build-portable.ps1  # 在安装包构建后生成单 EXE 便携版 (bundle/portable/)
 ```
 
 开发脚本使用全局 Cargo，不再携带工作区 Rust 工具链。开发账号和设置保存在 `.local/webview2/`（不提交 Git）；安装版使用系统应用数据目录。`node_modules/`、`dist/`、`src-tauri/target/` 和 TypeScript 增量缓存均可重新生成。mpv 二进制保留在 `src-tauri/resources/mpv/`，控制脚本 `portable_config/scripts/mjc-osc.lua` 属于应用源码。
@@ -67,6 +68,10 @@ scripts\build-tauri.ps1  # 产出 NSIS 安装包 (src-tauri/target/release/bundl
 Vite 不监听 `.local/`，避免 WebView2 锁定 Cookie 等数据文件时出现 `EBUSY`。这类监听错误应检查排除规则，不要删除账号和设置数据。
 
 构建脚本先处理 mpv 运行资源签名，再由 Tauri 在打包过程中签名应用程序、卸载程序和安装包。签名只使用已有的本机开发证书，未找到时跳过；不会自动安装证书。开发证书不等同于公开受信任的商业代码签名证书。
+
+Release 提供 `x64-setup.exe` 安装包和 `x64-portable.exe` 单文件便携版。便携版无需安装或管理员权限，启动时将主程序、mpv、DLL、控制脚本和 shader 解包到独立临时目录，退出后清理。账号、设置、截图和播放诊断保存在 EXE 旁的 `MyJellyfinClient-data/`，移动到其他位置时应携带该目录；不能把这份用户数据当作临时缓存删除。请放在可写目录中运行。
+
+便携版需要系统已有 [Microsoft Edge WebView2 Runtime](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution)，不会安装运行时或修改系统配置；缺少 WebView2 时可使用常规安装包。单文件封装使用 [NSIS](https://nsis.sourceforge.io/Docs/Chapter4.html) 的临时解包与等待进程退出机制，并非将 mpv 静态链接进主程序。两种包均不包含 `.local/` 账号、开发日志或播放器缓存。
 
 ## 验证
 
@@ -76,6 +81,7 @@ npm run test:servers
 npm run test:playback
 npm run test:settings
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/test-mpv-setup.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/test-portable.ps1
 cargo test --manifest-path src-tauri/Cargo.toml --lib
 & ./src-tauri/resources/mpv/mpv.com --no-config --vo=null --idle=yes --script=scripts/test-player-osc.lua
 ```

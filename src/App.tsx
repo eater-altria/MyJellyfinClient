@@ -76,6 +76,7 @@ export default function App() {
             <Route path="/server/:serverId/movie/:itemId" element={<MovieDetailPage />} />
             <Route path="/server/:serverId/episode/:itemId" element={<MovieDetailPage />} />
             <Route path="/server/:serverId/series/:itemId" element={<SeriesDetailPage />} />
+            <Route path="/server/:serverId/series/:itemId/season/:seasonId/episodes" element={<DetailCollection kind="episodes" />} />
             <Route path="/server/:serverId/item/:itemId/cast" element={<DetailCollection kind="cast" />} />
             <Route path="/server/:serverId/item/:itemId/similar" element={<DetailCollection kind="similar" />} />
             <Route path="/server/:serverId/person/:personId" element={<DetailCollection kind="person" />} />

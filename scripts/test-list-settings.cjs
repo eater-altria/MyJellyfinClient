@@ -31,8 +31,9 @@ const PosterCard = load('src/components/PosterCard.tsx', {
 const glass = load('src/utils/liquidGlass.ts');
 const LiquidGlass = load('src/components/LiquidGlass.tsx', { '../utils/liquidGlass': glass });
 const GlassButton = load('src/components/GlassButton.tsx', { './LiquidGlass': LiquidGlass });
+const ListNavigation = load('src/components/ListNavigation.tsx', { './GlassButton': GlassButton, './icons': icons });
 const SectionRow = load('src/components/SectionRow.tsx', {
-  '../store/settings': store, './icons': icons, './LiquidGlass': LiquidGlass, './GlassButton': GlassButton,
+  '../store/settings': store, './LiquidGlass': LiquidGlass, './ListNavigation': ListNavigation,
 }).default;
 const EpisodeRow = load('src/components/EpisodeRow.tsx', {
   './PosterCard': { __esModule: true, default: PosterCard }, 'react-router-dom': { useNavigate: () => () => {} },
