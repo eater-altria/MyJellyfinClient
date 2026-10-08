@@ -40,9 +40,11 @@ const api={
   logoUrl:()=>null,
 };
 const settings={showPreviewImage:true,showItemCountInTitle:true,sortFoldersSeparately:false};
+const librarySort=load('src/utils/librarySort.ts');
+const preferences={sorts:{},setSort(scope,sort){this.sorts[scope]=sort;}};
 const backdrop=load('src/store/appBackdrop.ts');
 const backdropState=()=>backdrop.useAppBackdrop.getState();
-const servers=Object.assign(selector=>selector({servers:[{id:'server',name:'Fixture',address:'https://fixture'}]}),{getState:()=>({getApi:()=>api})});
+const servers=Object.assign(selector=>selector({servers:[{id:'server',name:'Fixture',address:'https://fixture'}],apis:{server:api}}),{getState:()=>({getApi:()=>api})});
 const presentation=load('src/utils/listPresentation.ts',{'../api/mediaServer':media});
 function renderHarness(file,params) {
   let cursor=0;const hooks=[],effects=[];
@@ -59,10 +61,12 @@ function renderHarness(file,params) {
     'react-router-dom':{useParams:()=>params,useNavigate:()=>path=>navigation.push(path)},
     '../api/mediaServer':media,'../utils/listPresentation':presentation,
     '../store/servers':{useServers:servers},'../store/settings':{useSettings:selector=>selector?selector(settings):settings},
+    '../store/libraryPreferences':{useLibraryPreferences:selector=>selector(preferences)},'../utils/librarySort':librarySort,
     '../store/appBackdrop':backdrop,
     '../components/SectionRow':{__esModule:true,default:'Section'},'../components/PosterCard':{__esModule:true,default:'Poster'},
     '../components/HeroCarousel':{__esModule:true,default:'Hero'},
     '../components/LiquidGlass':{__esModule:true,default:'Glass'},
+    '../components/LibrarySortMenu':{__esModule:true,default:'SortMenu'},
     '../components/Feedback':{EmptyState:'Empty',ErrorState:'Error',Spinner:'Spinner'},
     '../components/icons':{IconServer:'Icon',IconChevronLeft:'Icon'},
   }).default;

@@ -15,6 +15,7 @@ function load(file, imports = {}) {
 const identity = load('src/utils/clientIdentity.ts', { './defaultClientIdentity.json': require('../src/utils/defaultClientIdentity.json') });
 const media = load('src/api/mediaServer.ts', { '../utils/clientIdentity': identity });
 const presentation = load('src/utils/listPresentation.ts', { '../api/mediaServer': media });
+const librarySort = load('src/utils/librarySort.ts');
 const defaults = {
   showItemCountInTitle: true, showFolderTime: true, sortFoldersSeparately: true,
   thumbnailFill: true, showPreviewImage: true, previewTimePercent: 10, preferEmbeddedCover: true,
@@ -185,10 +186,13 @@ async function checkLibraryQueries() {
     react,
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
     'react-router-dom': { useParams: () => ({ serverId: 'server', libraryId: 'library' }), useNavigate: () => () => {} },
-    '../store/servers': { useServers: { getState: () => ({ getApi: () => libraryApi }) } },
+    '../store/servers': { useServers: Object.assign(selector => selector({apis:{server:libraryApi}}), { getState: () => ({ getApi: () => libraryApi }) }) },
+    '../store/libraryPreferences': { useLibraryPreferences: selector => selector({sorts:{},setSort(){}}) },
+    '../utils/librarySort': librarySort,
     '../store/settings': store, '../utils/listPresentation': presentation,
     '../components/PosterCard': { __esModule: true, default: 'Poster' },
     '../components/LiquidGlass': { __esModule: true, default: 'Glass' },
+    '../components/LibrarySortMenu': { __esModule: true, default: 'SortMenu' },
     '../components/Feedback': { EmptyState: 'Empty', ErrorState: 'Error', Spinner: 'Spinner' },
     '../components/icons': icons,
   }).default;

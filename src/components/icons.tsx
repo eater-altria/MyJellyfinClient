@@ -63,6 +63,10 @@ export const IconChevronLeft = (p: P) => base(p, <path d="m15 6-6 6 6 6" />);
 export const IconChevronRight = (p: P) => base(p, <path d="m9 6 6 6-6 6" />);
 export const IconChevronDown = (p: P) => base(p, <path d="m6 9 6 6 6-6" />);
 
+export const IconArrowUp = (p: P) => base(p, <path d="M12 19V5m-6 6 6-6 6 6" />);
+export const IconArrowDown = (p: P) => base(p, <path d="M12 5v14m-6-6 6 6 6-6" />);
+export const IconSort = (p: P) => base(p, <path d="M4 6h16M4 12h11M4 18h6" />);
+
 export const IconPlay = (p: P) =>
   base(p, <path d="M8 5.5v13c0 .8.9 1.3 1.6.9l10-6.5a1.05 1.05 0 0 0 0-1.8l-10-6.5c-.7-.4-1.6.1-1.6.9Z" fill="currentColor" stroke="none" />);
 

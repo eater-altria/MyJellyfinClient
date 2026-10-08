@@ -27,6 +27,7 @@
 | `src-tauri/src/client_identity.rs` | 桌面 WebView 的真实 HTTP User-Agent、共享兼容版本与只读 Windows 版本查询 |
 | `src/store/servers.ts` | 服务器登录状态、令牌、API 实例和持久化 |
 | `src/store/settings.ts`、`src/pages/Settings.tsx` | 设置定义、默认值、持久化和设置界面 |
+| `src/store/libraryPreferences.ts`、`src/utils/librarySort.ts`、`src/components/LibrarySortMenu.tsx` | 媒体库排序字段、独立升降序、按服务器/账号/媒体库持久化及排序菜单 |
 | `src/pages/Home.tsx`、`src/pages/Library.tsx` | 首页分类、最新内容、媒体库、合集和分页 |
 | `src/pages/Search.tsx` | 媒体搜索、失败重试和迟到响应保护；轮播搜索按钮通过 `serverId` 查询参数指定当前主页的服务器范围 |
 | `src/utils/listPresentation.ts` | 列表元信息、预览图片、HDR/分辨率、文件夹排序 |
@@ -92,6 +93,7 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
 4. `mixed` 混合库和 `boxsets` 合集库都可能显示为「合集」，应按服务端类型判断，不能根据中文名称推断。
 5. 不要仅因「最新媒体」接口返回空数组就判断合集没有数据。分页的分类查询使用 `getLibraryItems` / `queryItems`，合集不是普通视频项目。
 6. 分类加载失败、空数据和仍在加载应能区分，并提供重试。不要吞掉错误后隐藏整个分类。
+   媒体库排序菜单提供名称、添加日期、年份、首播日期、评分、影评人评分、播放日期、播放次数与时长，排序字段和升序/降序独立选择。偏好按保存的服务器 ID、账号 ID 与媒体库/合集 ID 存于 `mjc:library-preferences`，返回页面和重启后在首次查询中恢复；没有偏好时保持名称升序。排序由服务器完成，所有分页共用字段和方向；切换排序、账号、媒体库或离开页面时取消旧请求并忽略迟到响应，保留文件夹优先设置。菜单支持键盘、Esc、点击外部关闭及短窗口滚动。
 7. 保留反向代理前缀、服务器协议差异、已有鉴权参数和媒体源的必要 HTTP 头。不要把本站令牌无条件追加到外部 URL。
    公共识别接口跨域重定向时保留用户选择的入口，不将元数据域名保存为媒体服务器地址；同域前缀重定向和同主机默认端口的 HTTP→HTTPS 升级仍可采用。Emby 根接口识别成功后优先验证原入口下同一服务器 ID 的 `/emby` 或 `/mediabrowser` 前缀，未提供有效前缀时保留根接口。旧连接需重新编辑并登录才能重新识别保存入口，不按猜测批量改写已有连接。
 8. 章节预览使用服务器已有章节图片；缺少图片时回退到服务器封面，不为列表下载完整视频。索引图片使用兼容两种协议的路径形式。
@@ -160,7 +162,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 & ./src-tauri/resources/mpv/mpv.com --no-config --vo=null --idle=yes --script=scripts/test-player-osc.lua
 ```
 
-`test:home` 覆盖全部分类、8 个合集、成员浏览、多页加载、重试和取消；`test:servers` 使用本地 HTTP fixture，并用真实 Chromium 检查登录接收端看到的统一 UA、默认鉴权标识和手动覆盖；`test:playback` 覆盖关闭、元数据标题及慢网络生命周期；`test:settings` 覆盖真实组件、偏好和 3 秒迁移。Rust/Lua 测试覆盖原生输入、启动重试、TLS、截图目录回退、真实 GPU/ASS 渲染、毛玻璃像素效果和截图隔离、开播窗口比例及响应式控件，需本地 mpv 和 Windows 环境；`client_identity` 原生测试覆盖共享标识与实际 Windows 平台的 UA 格式。Rust 回归同时运行 Lua 控件交互测试；原生控件渲染使用 `scripts/test-player-osc-render.lua` 的合成媒体状态，不读取账号或服务器截图。
+`test:home` 覆盖全部分类、8 个合集、成员浏览、多页加载、重试和取消；排序回归使用真实 React/Chromium 验证独立字段与方向、返回及重启恢复、服务器/账号/媒体库隔离、分页取消与迟到响应、菜单焦点及普通/窄窗口和 100% / 125% / 150% DPI。`test:servers` 使用本地 HTTP fixture，并用真实 Chromium 检查登录接收端看到的统一 UA、默认鉴权标识和手动覆盖；`test:playback` 覆盖关闭、元数据标题及慢网络生命周期；`test:settings` 覆盖真实组件、偏好和 3 秒迁移。Rust/Lua 测试覆盖原生输入、启动重试、TLS、截图目录回退、真实 GPU/ASS 渲染、毛玻璃像素效果和截图隔离、开播窗口比例及响应式控件，需本地 mpv 和 Windows 环境；`client_identity` 原生测试覆盖共享标识与实际 Windows 平台的 UA 格式。Rust 回归同时运行 Lua 控件交互测试；原生控件渲染使用 `scripts/test-player-osc-render.lua` 的合成媒体状态，不读取账号或服务器截图。
 播放诊断回归覆盖脱敏、完整响应体中的 HTTP 错误、独立编号、取消后的迟到响应、日志轮转与满队列非阻塞；真实 mpv 从本地 HTTP 522 fixture 接收日志事件并与 `end-file/error` 关联。
 
 `test-mpv-setup.ps1` 在 Windows PowerShell 5.1 下使用离线传输 fixture 和真实 `tar.exe` 验证缺失下载、完整资源复用、部分资源修复、控制脚本保留、校验失败、架构与压缩包检查、安装回滚和临时目录清理，不使用账号或访问网络。

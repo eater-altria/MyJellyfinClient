@@ -3,20 +3,14 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { BaseItem, MediaServerApi, libraryItemTypes } from '../api/mediaServer';
 import { useServers } from '../store/servers';
 import { useSettings } from '../store/settings';
+import { useLibraryPreferences } from '../store/libraryPreferences';
+import { DEFAULT_LIBRARY_SORT, LIBRARY_SORT_OPTIONS, librarySortScope } from '../utils/librarySort';
 import { mediaFolderDate, mediaSortParams, orderMediaItems } from '../utils/listPresentation';
 import PosterCard from '../components/PosterCard';
 import LiquidGlass from '../components/LiquidGlass';
+import LibrarySortMenu from '../components/LibrarySortMenu';
 import { EmptyState, ErrorState, Spinner } from '../components/Feedback';
 import { IconChevronLeft, IconServer } from '../components/icons';
-
-type SortKey = 'name' | 'date' | 'year' | 'rating';
-
-const SORT_OPTIONS: { key: SortKey; label: string; sortBy: string; sortOrder: string }[] = [
-  { key: 'name', label: '名称', sortBy: 'SortName', sortOrder: 'Ascending' },
-  { key: 'date', label: '添加日期', sortBy: 'DateCreated', sortOrder: 'Descending' },
-  { key: 'year', label: '年份', sortBy: 'ProductionYear', sortOrder: 'Descending' },
-  { key: 'rating', label: '评分', sortBy: 'CommunityRating', sortOrder: 'Descending' },
-];
 
 type TypeFilter = 'all' | 'movie' | 'series';
 
@@ -35,13 +29,16 @@ export default function LibraryPage() {
   const showCount = useSettings((settings) => settings.showItemCountInTitle);
   const showFolderTime = useSettings((settings) => settings.showFolderTime);
   const foldersFirst = useSettings((settings) => settings.sortFoldersSeparately);
+  const cachedApi = useServers(state => state.apis[serverId]);
   const api = useMemo<MediaServerApi | null>(
-    () => useServers.getState().getApi(serverId),
-    [serverId],
+    () => cachedApi ?? useServers.getState().getApi(serverId),
+    [serverId, cachedApi],
   );
+  const sortScope = librarySortScope(serverId, api?.userId, libraryId);
+  const sort = useLibraryPreferences(state => state.sorts[sortScope] ?? DEFAULT_LIBRARY_SORT);
+  const setSort = useLibraryPreferences(state => state.setSort);
 
   const [view, setView] = useState<BaseItem | null>(null);
-  const [sortKey, setSortKey] = useState<SortKey>('name');
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [items, setItems] = useState<BaseItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -50,6 +47,7 @@ export default function LibraryPage() {
   const [error, setError] = useState('');
   const [retryTick, setRetryTick] = useState(0);
   const requestVersion = useRef(0);
+  const pageRequest = useRef<AbortController | null>(null);
   const viewLibrary = useRef<string>();
 
   const includeItemTypes = useMemo(() => {
@@ -62,38 +60,40 @@ export default function LibraryPage() {
 
   const buildParams = useCallback(
     (startIndex: number) => {
-      const sort = SORT_OPTIONS.find((o) => o.key === sortKey) ?? SORT_OPTIONS[0];
+      const option = LIBRARY_SORT_OPTIONS.find(item => item.key === sort.key) ?? LIBRARY_SORT_OPTIONS[0];
       return {
         ParentId: libraryId,
         Recursive: true,
         IncludeItemTypes: includeItemTypes,
-        ...mediaSortParams(sort.sortBy, sort.sortOrder, foldersFirst),
+        ...mediaSortParams(option.sortBy, sort.order, foldersFirst),
         Limit: PAGE_SIZE,
         StartIndex: startIndex,
         EnableImageTypes: 'Primary,Thumb,Backdrop,Chapter',
       };
     },
-    [libraryId, includeItemTypes, sortKey, foldersFirst],
+    [libraryId, includeItemTypes, sort.key, sort.order, foldersFirst],
   );
 
   // Load the view type before choosing item filters, including BoxSet views.
   useEffect(() => {
     if (!api) return;
     let mounted = true;
+    const controller = new AbortController();
     viewLibrary.current = undefined;
     setView(null); setLoading(true); setError('');
-    api.getItem(libraryId).then(v => {
+    api.getItem(libraryId, controller.signal).then(v => {
       if (mounted) { viewLibrary.current = libraryId; setView(v); }
     }).catch(e => {
       if (mounted) { setError(e instanceof Error ? e.message : String(e)); setLoading(false); }
     });
-    return () => { mounted = false; };
+    return () => { mounted = false; controller.abort(); };
   }, [api, libraryId, retryTick]);
 
   // (Re)load items when api / sort / filter changes
   useEffect(() => {
     if (!api || !view || viewLibrary.current !== libraryId) return;
     let mounted = true;
+    const controller = new AbortController();
     ++requestVersion.current;
     setLoading(true);
     setLoadingMore(false);
@@ -101,7 +101,7 @@ export default function LibraryPage() {
     setTotal(0);
     setError('');
     api
-      .queryItems(buildParams(0))
+      .queryItems(buildParams(0), controller.signal)
       .then((res) => {
         if (!mounted) return;
         setItems(res.Items);
@@ -115,24 +115,30 @@ export default function LibraryPage() {
       });
     return () => {
       mounted = false;
+      controller.abort();
+      pageRequest.current?.abort();
+      pageRequest.current = null;
       ++requestVersion.current;
     };
   }, [api, buildParams, retryTick, view, libraryId]);
 
   const loadMore = () => {
-    if (!api || loadingMore) return;
+    if (!api || loading || loadingMore || pageRequest.current) return;
     const version = requestVersion.current;
+    const controller = new AbortController();
+    pageRequest.current = controller;
     setLoadingMore(true);
     api
-      .queryItems(buildParams(items.length))
+      .queryItems(buildParams(items.length), controller.signal)
       .then((res) => {
         if (version !== requestVersion.current) return;
         setItems((prev) => [...prev, ...res.Items]);
         setTotal(res.TotalRecordCount);
         setLoadingMore(false);
+        pageRequest.current = null;
       })
       .catch(() => {
-        if (version === requestVersion.current) setLoadingMore(false);
+        if (version === requestVersion.current) { setLoadingMore(false); pageRequest.current = null; }
       });
   };
 
@@ -182,7 +188,7 @@ export default function LibraryPage() {
           {folderDate && <span className="hidden text-[11px] text-text-secondary sm:inline">{folderDate}</span>}
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           {isMixed && (
             <div className="glass-surface flex rounded-full p-1">
               {FILTER_OPTIONS.map((o) => (
@@ -201,18 +207,7 @@ export default function LibraryPage() {
               ))}
             </div>
           )}
-          <select
-            value={sortKey}
-            aria-label="排序方式"
-            onChange={(e) => setSortKey(e.target.value as SortKey)}
-            className="glass-input px-3 py-2 text-[12px] text-text-primary"
-          >
-            {SORT_OPTIONS.map((o) => (
-              <option key={o.key} value={o.key}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+          <LibrarySortMenu key={sortScope} value={sort} onChange={next => setSort(sortScope, next)} />
         </div>
       </LiquidGlass>
 
