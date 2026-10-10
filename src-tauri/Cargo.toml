@@ -1,6 +1,6 @@
 [package]
 name = "my-jellyfin-client"
-version = "0.4.3"
+version = "0.4.4"
 description = "A Jellyfin / Emby Windows client with a Liquid Glass inspired UI"
 authors = ["you"]
 edition = "2021"
@@ -25,6 +25,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_Security_Authorization",
   "Win32_Security_Cryptography",
   "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Shell",
   "Win32_UI_HiDpi",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_Graphics_Gdi",

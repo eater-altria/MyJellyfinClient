@@ -112,20 +112,26 @@ function SeekBar({
     >
       <div
         ref={trackRef}
-        className="relative h-1 w-full rounded bg-white/30 transition-all duration-150 group-hover:h-1.5"
+        className="relative h-1 w-full rounded bg-white/[0.18] transition-all duration-150 group-hover:h-1.5"
       >
         {duration > 0 &&
-          buffered.map(([s, e], i) => (
-            <div
-              key={i}
-              className="absolute inset-y-0 rounded bg-white/20"
-              style={{
-                left: `${(s / duration) * 100}%`,
-                width: `${Math.max(0, ((e - s) / duration) * 100)}%`,
-              }}
-            />
-          ))}
-        <div className="absolute inset-y-0 left-0 rounded bg-white/80" style={{ width: `${pct}%` }} />
+          buffered.flatMap(([s, e], i) => {
+            if (!Number.isFinite(s) || !Number.isFinite(e) || !Number.isFinite(duration)) return [];
+            const start = Math.max(0, Math.min(duration, s));
+            const end = Math.max(0, Math.min(duration, e));
+            if (end <= start) return [];
+            return (
+              <div
+                key={i}
+                className="absolute inset-y-0 rounded bg-white/40"
+                style={{
+                  left: `${(start / duration) * 100}%`,
+                  width: `${((end - start) / duration) * 100}%`,
+                }}
+              />
+            );
+          })}
+        <div className="absolute inset-y-0 left-0 rounded bg-white/[0.82]" style={{ width: `${pct}%` }} />
         <div
           className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white opacity-100 shadow transition-opacity group-hover:opacity-100"
           style={{ left: `${pct}%` }}
@@ -346,6 +352,7 @@ export default function PlayerPage() {
     switchingRef.current = false;
     corsRetriedRef.current = false;
     setLoading(true); setError(null); setBuffering(false); setItem(null);
+    setBuffered([]);
     usePlaybackTitle.getState().setTitle('');
     showControlsMenu(false);
     setAudioTracks([]); setSubTracks([]); setAudioTrack(-1); setSubTrack(-1); setSubSearch('');
@@ -685,8 +692,10 @@ export default function PlayerPage() {
         playsInline
         autoPlay
         onLoadedMetadata={handleLoadedMetadata}
-        onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime ?? 0)}
+        onTimeUpdate={() => { setCurrentTime(videoRef.current?.currentTime ?? 0); readBuffered(); }}
         onProgress={readBuffered}
+        onSeeked={readBuffered}
+        onEmptied={() => setBuffered([])}
         onDurationChange={() => setDuration(videoRef.current?.duration ?? 0)}
         onRateChange={() => setPlaybackRate(videoRef.current?.playbackRate ?? 1)}
         onVolumeChange={() => {

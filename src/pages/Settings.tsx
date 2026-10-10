@@ -3,6 +3,7 @@ import { useSettings, AccentColor, AppSettings, PLAYER_CACHE_MIN_MB, PLAYER_CACH
   CLIENT_IDENTITY_MAX_LENGTH, CLIENT_NAME_PRESETS, DEFAULT_CLIENT_IDENTITY } from '../store/settings';
 import Toggle from '../components/Toggle';
 import LiquidGlass from '../components/LiquidGlass';
+import UpdateCheck from '../components/UpdateCheck';
 import { isTauri } from '../platform/window';
 import type { ClientIdentity, ClientIdentityProtocol } from '../utils/clientIdentity';
 import {
@@ -230,6 +231,9 @@ function GeneralTab() {
       </Section>
       <ClientIdentitySection protocol="jellyfin" />
       <ClientIdentitySection protocol="emby" />
+      <Section label="关于与更新" footnote="点击后检查 GitHub 上的最新正式 Release，由你前往发布页下载并安装。">
+        <UpdateCheck />
+      </Section>
       <div className="mt-10 flex justify-center">
         <button
           className="glass-button px-5 py-2.5 text-[13px] text-red-600"

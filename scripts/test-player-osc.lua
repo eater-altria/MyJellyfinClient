@@ -142,6 +142,39 @@ local ok, err = pcall(function()
     local before_shader_updates = shader_updates
     observers['time-pos']('time-pos', 121)
     assert(shader_updates == before_shader_updates, 'Playback progress must not resend unchanged glass geometry')
+    local cache = observers['demuxer-cache-state']
+    local function cache_fills()
+        local _, count = overlays[1].data:gsub('\\1a&H99&', '')
+        return count
+    end
+    cache('demuxer-cache-state', {['seekable-ranges'] = {
+        {start = 900, ['end'] = 1200}, {start = -10, ['end'] = 300},
+        {start = 200, ['end'] = 500}, {start = 3400, ['end'] = 4000},
+        {start = 4000, ['end'] = 4200}, {start = 4500, ['end'] = 4600}, {start = 8, ['end'] = 7},
+        {start = 0/0, ['end'] = 100}, {start = 0, ['end'] = math.huge},
+        {start = '0', ['end'] = 100}, false,
+    }})
+    assert(#controller.cached_ranges == 4 and controller.cached_ranges[1]['end'] == 500,
+        'Unordered overlapping cache ranges must merge while gaps and valid timestamps remain intact')
+    assert(cache_fills() == 3, 'Cache fills must clip to the duration and ignore out-of-bounds or invalid ranges')
+    assert(shader_updates == before_shader_updates, 'Cache changes must not resend unchanged glass geometry')
+    observers.duration('duration', 0)
+    assert(cache_fills() == 0 and not controller.seek, 'Unknown duration must not draw cache ranges or an interactive timeline')
+    observers.duration('duration', math.huge)
+    assert(cache_fills() == 0 and not controller.seek, 'Infinite duration must not produce invalid ASS timeline geometry')
+    observers.duration('duration', 3600)
+    assert(cache_fills() == 3, 'Ranges received before a usable duration must appear once duration is known')
+    local cached_ass = overlays[1].data
+    cache('demuxer-cache-state', {['seekable-ranges'] = {{start = 1800, ['end'] = 2100}}})
+    assert(cache_fills() == 1 and overlays[1].data ~= cached_ass, 'A seek/cache eviction must replace the visible cached ranges immediately')
+    cache('demuxer-cache-state', nil)
+    assert(cache_fills() == 0, 'Unavailable cache state must remove the buffer layer')
+    cache('demuxer-cache-state', {['seekable-ranges'] = {{start = 0, ['end'] = 3600}}})
+    events['start-file']()
+    assert(cache_fills() == 0, 'Starting another media file must discard previous cache ranges')
+    cache('demuxer-cache-state', {['seekable-ranges'] = {{start = 0, ['end'] = 3600}}})
+    events['end-file']()
+    assert(cache_fills() == 0, 'Stopping playback must discard previous cache ranges')
     assert(control('sub') and control('audio'), 'Track actions must be icon controls')
     assert(not overlays[1].data:find('字幕', 1, true), 'Icon labels appear only on hover')
     mouse.x, mouse.y = center('sub')
@@ -312,6 +345,8 @@ local ok, err = pcall(function()
     clock = 103; timers[0.25]()
     assert(#controller.zones == 0, 'Idle controls must hide at 3 seconds')
     assert(tonumber(shader_opts['mjc-glass/surface_count']) == 0, 'Auto-hide must bypass every GPU blur pass')
+    cache('demuxer-cache-state', {['seekable-ranges'] = {{start = 120, ['end'] = 600}}})
+    assert(not controller.visible and #controller.zones == 0, 'Background caching must not wake hidden controls')
     assert(cursor_at(500, 722) == 'default', 'Auto-hidden controls must clear their interactive cursor regions')
     messages['mjc-settings']('{"autoHideControlsSeconds":5}')
     clock = 200; observers['mouse-pos']('mouse-pos', mouse)

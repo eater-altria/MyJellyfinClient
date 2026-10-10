@@ -217,6 +217,22 @@ fn real_mpv_controller_renders_at_wide_small_and_high_dpi_sizes() {
         let white_pixels = dib[40 + (bar_top * width * 4) as usize..].chunks_exact(4).filter(|pixel|
             pixel[0] > 210 && pixel[1] > 210 && pixel[2] > 210).count();
         assert!(white_pixels > 100, "the icon controls and timeline must render in white");
+        let seek = command(json!(["get_property", "user-data/mjc-render-seek"]));
+        let sx0 = seek["x0"].as_f64().unwrap();
+        let sx1 = seek["x1"].as_f64().unwrap();
+        let sy = ((seek["y0"].as_f64().unwrap() + seek["y1"].as_f64().unwrap()) / 2.0) as i32;
+        let timeline_brightness = |fraction: f64| {
+            let x = (sx0 + (sx1 - sx0) * fraction) as i32;
+            let i = 40 + ((sy * width + x) * 4) as usize;
+            dib[i..i + 3].iter().map(|channel| *channel as f64).sum::<f64>() / 3.0
+        };
+        let played = timeline_brightness(0.035);
+        let cached = timeline_brightness(0.2);
+        let gap = timeline_brightness(0.5);
+        let second_cache = timeline_brightness(0.7);
+        let uncached = timeline_brightness(0.9);
+        assert!(played > cached + 20.0 && cached > gap + 20.0 && second_cache > uncached + 20.0,
+            "timeline must distinguish played/cached/uncached and retain cache gaps: {played}, {cached}, {gap}, {second_cache}, {uncached}, {width}x{height}, {scale}x");
         let sample = 40 + (((height - (6.0 * scale) as i32) * width + width / 2) * 4) as usize;
         let contrast = |pixels: &[u8]| *pixels.iter().max().unwrap() as i32 - *pixels.iter().min().unwrap() as i32;
         if mode == "bright" {

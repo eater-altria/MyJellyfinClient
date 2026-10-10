@@ -27,6 +27,7 @@
 | `src-tauri/src/client_identity.rs` | 桌面 WebView 的真实 HTTP User-Agent、共享兼容版本与只读 Windows 版本查询 |
 | `src/store/servers.ts` | 服务器登录状态、令牌、API 实例和持久化 |
 | `src/store/settings.ts`、`src/pages/Settings.tsx` | 设置定义、默认值、持久化和设置界面 |
+| `src/components/UpdateCheck.tsx`、`src/api/appUpdates.ts`、`src/platform/appUpdates.ts`、`src-tauri/src/app_updates.rs` | 手动检查 GitHub 正式 Release、版本比较和固定发布页的系统浏览器入口 |
 | `src/store/libraryPreferences.ts`、`src/utils/librarySort.ts`、`src/components/LibrarySortMenu.tsx` | 媒体库排序字段、独立升降序、按服务器/账号/媒体库持久化及排序菜单 |
 | `src/pages/Home.tsx`、`src/pages/Library.tsx` | 首页分类、最新内容、媒体库、合集和分页 |
 | `src/pages/Search.tsx` | 媒体搜索、失败重试和迟到响应保护；轮播搜索按钮通过 `serverId` 查询参数指定当前主页的服务器范围 |
@@ -105,6 +106,10 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
 11. 已识别服务器的 `Authorization` 和 `X-Emby-Authorization` 必须使用同一协议前缀：Emby 使用 `Emby`，Jellyfin 使用 `MediaBrowser`。账号密码通过 `/Users/AuthenticateByName` 的 `Username` / `Pw` 换取服务器返回的 `AccessToken`，原样按服务器保存；客户端不生成、散列或跨应用借用令牌，也不为刷新令牌擅自重置持久设备 ID。
 12. 编辑 Emby 连接可显式勾选「重新登记此服务器的登录设备」，并填写该连接的客户端名称、重新输入密码。仅该连接生成新的 `deviceId`，成功登录后与 `clientName` 一起保存；失败保留原连接。之后登录、缓存/重建 API、播放协商和流 URL 共用此固定 ID，客户端名称优先使用连接的覆盖值，版本及设备名称仍来自对应产品设置。其他连接和原有全局设备 ID 保持稳定；普通删除、添加、编辑和重新登录不自动重置设备身份。该选项用于服务端按首次设备登记限制播放的兼容情况，不应自动替用户选择客户端名称。
 
+## 手动检查更新
+
+「设置 → 通用 → 关于与更新」显示当前运行版本，只有点击「检查更新」才请求公开仓库的 `/releases/latest`，不在启动、打开设置或后台自动检查，不下载或安装更新。桌面版本来自 Tauri `getVersion`，浏览器版本来自打包的 `package.json`。只比较非草稿、非预发布的正式 Release；按语义版本数值及预发布规则比较，不将低版本提示为更新。无正式 Release、无需更新、新版本、超时、网络/限流及无效响应分别显示，可手动重试。检查期间防止重复请求，离开通用设置取消并忽略迟到结果；结果不持久化。GitHub 请求不附带媒体账号、令牌或鉴权头。发布页仅打开本项目固定的 GitHub Release URL；Windows 使用 `open_project_releases` 命令调用默认浏览器，不接受任意 URL 或程序参数。
+
 ## 播放器不能退化的行为
 
 ### 退出与生命周期
@@ -131,6 +136,7 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
 - 控件字号和点击尺寸跟随 Windows DPI，不随窗口高宽整体缩小。小窗口通过分行、折叠到「更多」和菜单滚动适配。
 - 窗口标题、原生画面标题及开播提示使用服务器元数据，不能回退到带鉴权参数的流 URL。双击画面按设置暂停/播放，控制面板和菜单的双击不触发背景播放动作。
 - 播放器控制使用白色图标、半透明底栏和不同透明度的白色进度条，文字标签只在悬浮时出现；菜单选中项使用白色勾选。暂停不锁定控件，保留切换媒体、全屏、进度和音轨等操作；已移除暂停锁定设置、解锁提示和 K 锁定快捷键，旧设置迁移时删除此字段。
+- 控制栏进度条按未缓存底轨、真实缓存段、已播放进度依次叠加，白色不透明度分别为 18%、40%、82%。原生读取 `demuxer-cache-state/seekable-ranges`，合并重叠段并保留间断；浏览器读取媒体元素的 `buffered`。不按缓存字节数或下载速度推算位置；未知时长不画缓存段，缓存失效及切换/停止媒体时清除旧段，后台缓存更新不唤醒隐藏控件。
 - 原生玻璃由 `gpu-next` 的 `mjc-glass.glsl` 在低分辨率纹理上模糊，并在可见面板边缘做实时透镜折射和 RGB 色散；Lua 同步范围、圆角、DPI、视频显示区域和 `GLASS_MATERIAL` 参数，图标与文字仍由 ASS 清晰绘制。无可见玻璃面板时跳过玻璃处理，不用 CPU 截图实现背景效果。PQ、HLG 和线性 HDR 输出跳过 SDR 饱和度及亮背景压暗处理。保存视频截图通过 Lua 的 `mjc-capture` 暂时隔离全部玻璃处理并恢复参数，保留 GPU 色彩和字幕处理。
 - 空格仅切换播放/暂停，不更新控制栏活动时间或重新显示控制 UI；首次激活应用后也应直接可用。
 - 自动隐藏默认 3 秒，旧设置通过一次性版本迁移采用 3 秒；之后用户重新选择的间隔保持持久化。菜单、媒体信息和进度拖动期间保持控件可见。
@@ -166,6 +172,8 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 播放诊断回归覆盖脱敏、完整响应体中的 HTTP 错误、独立编号、取消后的迟到响应、日志轮转与满队列非阻塞；真实 mpv 从本地 HTTP 522 fixture 接收日志事件并与 `end-file/error` 关联。
 
 `test-mpv-setup.ps1` 在 Windows PowerShell 5.1 下使用离线传输 fixture 和真实 `tar.exe` 验证缺失下载、完整资源复用、部分资源修复、控制脚本保留、校验失败、架构与压缩包检查、安装回滚和临时目录清理，不使用账号或访问网络。
+
+`test:settings` 的更新检查回归使用离线 GitHub 响应及真实 React/Chromium 设置页面，验证仅点击请求、当前版本、新旧/无效版本、无 Release、网络/HTTP/限流错误、超时、防重、取消/迟到响应及普通/窄窗口和 100% / 125% / 150% DPI 布局，不访问 GitHub 或用户服务器。
 
 `test:ui` 覆盖圆角玻璃透镜的中性中心、增强边缘折射、长面板采样、纹理尺寸与缓存、ResizeObserver/动画帧清理，首页/详情临时背景的路由/实例隔离、预览开关与图片失败重试，以及搜索/记录失败重试、迟到响应和弹窗 StrictMode 焦点恢复。玻璃材质需另用实际 Chromium/WebView2 视觉核对；其他浏览器保留模糊和高光回退。海报、头像与轨道卡片使用轻量静态表面，不为每个媒体项目创建 SVG 透镜；首页媒体区只用一个随滚动保持在可见窗口内的玻璃层，避免无限分页扩大 GPU 材质尺寸。减少动态效果、高对比度与减少透明度偏好有 CSS 回退。
 

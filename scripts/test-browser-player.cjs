@@ -140,3 +140,40 @@ seek.props.onPointerDown({ currentTarget: { setPointerCapture() {} }, pointerId:
 seek.props.onLostPointerCapture();
 seek.props.onPointerMove({ clientX: 300 }); assert.equal(video.currentTime, 25, 'Lost capture must end the seek drag');
 console.log('PASS: seek dragging outside the bar, final release position, capture loss and auto-hide protection');
+
+// Exercise the page's actual media events and resulting seek-bar layers.
+video.duration = 100;
+video.currentTime = 25;
+let bufferedRanges = [[0, 40], [60, 80]];
+video.buffered = { get length() { return bufferedRanges.length; },
+  start: i => bufferedRanges[i][0], end: i => bufferedRanges[i][1] };
+let videoNode = find(page, node => node.type === 'video');
+videoNode.props.onDurationChange();
+videoNode.props.onTimeUpdate();
+videoNode.props.onProgress();
+page = render();
+let cacheSeekNode = find(page, node => node.type?.name === 'SeekBar');
+assert.deepEqual(cacheSeekNode.props.buffered, [[0, 40], [60, 80]], 'Read actual buffered TimeRanges, preserving unbuffered gaps');
+seek = cacheSeekNode.type(cacheSeekNode.props);
+const track = seek.props.children[0];
+const fills = track.props.children[0];
+assert(track.props.className.includes('bg-white/[0.18]'));
+assert.deepEqual(fills.map(fill => fill.props.style), [{ left: '0%', width: '40%' }, { left: '60%', width: '20%' }]);
+assert(fills.every(fill => fill.props.className.includes('bg-white/40')));
+assert.equal(track.props.children[1].props.style.width, '25%', 'The brighter played fill must remain above the cached fills');
+assert(track.props.children[1].props.className.includes('bg-white/[0.82]'));
+bufferedRanges = [[70, 90]];
+videoNode = find(page, node => node.type === 'video');
+videoNode.props.onSeeked(); page = render();
+assert.deepEqual(find(page, node => node.type?.name === 'SeekBar').props.buffered, [[70, 90]], 'Seeking must refresh cache ranges even without another progress event');
+bufferedRanges = [];
+find(page, node => node.type === 'video').props.onTimeUpdate(); page = render();
+assert.deepEqual(find(page, node => node.type?.name === 'SeekBar').props.buffered, [], 'Cache eviction must remove stale ranges during playback');
+seek = cacheSeekNode.type({ ...cacheSeekNode.props, buffered: [[-10, 20], [90, 120], [110, 130], [10, 5], [NaN, 50]] });
+assert.deepEqual(seek.props.children[0].props.children[0].map(fill => fill.props.style),
+  [{ left: '0%', width: '20%' }, { left: '90%', width: '10%' }], 'Cache fills must stay inside the finite timeline');
+seek = cacheSeekNode.type({ ...cacheSeekNode.props, duration: 0 });
+assert.equal(seek.props['aria-disabled'], true, 'Unknown duration must keep the seek bar disabled');
+find(page, node => node.type === 'video').props.onEmptied(); page = render();
+assert.deepEqual(find(page, node => node.type?.name === 'SeekBar').props.buffered, [], 'Emptying the media element must clear cache display');
+console.log('PASS: actual cache events, layered playback/cache progress, discontinuous ranges, seeking, eviction, bounds and media reset');

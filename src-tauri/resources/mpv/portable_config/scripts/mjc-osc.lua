@@ -6,6 +6,7 @@ local assdraw = require('mp.assdraw')
 local utils = require('mp.utils')
 
 local FONT = 'Microsoft YaHei'
+local SEEK_OPACITY = { track = 0.18, buffered = 0.40, played = 0.82 }
 
 local state = {
     osd_w = 1280, osd_h = 720,
@@ -43,6 +44,7 @@ local state = {
     volume = 100,
     mute = false,
     cache_kbs = -1,
+    cached_ranges = {}, -- Actual seekable demuxer ranges in seconds, including gaps.
     title = '',
     sid = nil,
     aid = nil,
@@ -90,6 +92,34 @@ local function fmt_kbs(kbs)
 end
 
 local function clamp(v, a, b) return math.max(a, math.min(b, v)) end
+
+local function finite_number(v)
+    return type(v) == 'number' and v == v and v > -math.huge and v < math.huge
+end
+
+local function cached_ranges(value)
+    local ranges = {}
+    if type(value) ~= 'table' or type(value['seekable-ranges']) ~= 'table' then return ranges end
+    for _, range in ipairs(value['seekable-ranges']) do
+        if type(range) == 'table' and finite_number(range.start) and finite_number(range['end'])
+            and range['end'] > range.start then
+            ranges[#ranges + 1] = {start = range.start, ['end'] = range['end']}
+        end
+    end
+    table.sort(ranges, function(a, b) return a.start < b.start end)
+    -- mpv can publish overlapping ranges before joining them. Merge first so
+    -- translucent fills do not double up and imply a different cache state.
+    local merged = {}
+    for _, range in ipairs(ranges) do
+        local previous = merged[#merged]
+        if previous and range.start <= previous['end'] then
+            previous['end'] = math.max(previous['end'], range['end'])
+        else
+            merged[#merged + 1] = range
+        end
+    end
+    return merged
+end
 
 local function zone(zones, x0, y0, x1, y1, action, name)
     zones[#zones + 1] = { x0 = x0, y0 = y0, x1 = x1, y1 = y1, action = action, name = name }
@@ -702,7 +732,7 @@ function render_bar()
     local a = new_ass()
     state.zones, state.menu_anchors, state.seek, state.bar_bounds = {}, {}, nil, nil
     state.volume_slider = nil
-    local has_video = state.duration > 0
+    local has_video = finite_number(state.duration) and state.duration > 0
     local show_full = state.visible or state.persistent
     local mx, my = mouse_pos()
     local fg, dim = ass_color(0.98, 1, 1, 1), ass_color(0.72, 1, 1, 1)
@@ -835,9 +865,17 @@ function render_bar()
         zone(state.zones, sx0 - 4 * scale, sy0, sx1 + 4 * scale, sy1, function() end, 'seek')
         draw_text(a, tx, ty - 11 * scale, fs, fg, cur_t)
         draw_text(a, sx1 + 18 * scale, ty - 11 * scale, fs, fg, tot_t)
-        draw_round_rect(a, sx0, ty - sh / 2, sx1, ty + sh / 2, sh / 2, ass_color(0.30, 1, 1, 1))
+        draw_round_rect(a, sx0, ty - sh / 2, sx1, ty + sh / 2, sh / 2, ass_color(SEEK_OPACITY.track, 1, 1, 1))
+        for _, range in ipairs(state.cached_ranges) do
+            local start = clamp(range.start / state.duration, 0, 1)
+            local finish = clamp(range['end'] / state.duration, 0, 1)
+            if finish > start then
+                draw_round_rect(a, sx0 + (sx1 - sx0) * start, ty - sh / 2,
+                    sx0 + (sx1 - sx0) * finish, ty + sh / 2, sh / 2, ass_color(SEEK_OPACITY.buffered, 1, 1, 1))
+            end
+        end
         local kx = sx0 + (sx1 - sx0) * clamp(state.timepos / state.duration, 0, 1)
-        if kx > sx0 then draw_round_rect(a, sx0, ty - sh / 2, kx, ty + sh / 2, sh / 2, ass_color(0.82, 1, 1, 1)) end
+        if kx > sx0 then draw_round_rect(a, sx0, ty - sh / 2, kx, ty + sh / 2, sh / 2, ass_color(SEEK_OPACITY.played, 1, 1, 1)) end
         draw_round_rect(a, kx - 4 * scale, ty - 4 * scale, kx + 4 * scale, ty + 4 * scale, 4 * scale, fg)
         if hovered_seek or state.seek_drag then
             tooltip, tooltip_x = fmt_time(seek_frac_at(mx) * state.duration), clamp(mx, 50 * scale, w - 50 * scale)
@@ -1258,12 +1296,13 @@ mp.observe_property('sid', 'string', function(_, v) state.sid = v end)
 mp.observe_property('aid', 'string', function(_, v) state.aid = v end)
 mp.observe_property('track-list', 'native', function() sync_tracks() end)
 mp.observe_property('demuxer-cache-state', 'native', function(_, v)
-    if v and v['cache-speed'] then
+    state.cached_ranges = cached_ranges(v)
+    if type(v) == 'table' and v['cache-speed'] then
         state.cache_kbs = v['cache-speed']
     else
         state.cache_kbs = -1
     end
-    if state.visible then render_top() end
+    if state.visible then render_bar(); render_top() end
 end)
 
 mp.observe_property('osd-dimensions', 'native', function() render_all() end)
@@ -1596,6 +1635,12 @@ mp.add_periodic_timer(0.25, function()
     end
 end)
 
+mp.register_event('start-file', function()
+    state.cached_ranges = {}
+    state.cache_kbs = -1
+    render_all()
+end)
+
 mp.register_event('file-loaded', function()
     last_cursor_zones = '' -- Replay after IPC connects, including duration-less streams.
     state.remembered_applied = { audio = false, sub = false }
@@ -1609,6 +1654,8 @@ mp.register_event('file-loaded', function()
 end)
 
 mp.register_event('end-file', function()
+    state.cached_ranges = {}
+    state.cache_kbs = -1
     finish_hold(); state.pending_click = nil; state.sub_searching = false
     state.menu = nil
     render_all()

@@ -3,6 +3,7 @@
 local native_property, string_property = mp.get_property_native, mp.get_property
 local register_message = mp.register_script_message
 local native_command = mp.commandv
+local set_native_property = mp.set_property_native
 local observers, messages = {}, {}
 local mouse = {x = 0, y = 0}
 local tracks = {
@@ -42,6 +43,9 @@ register_message('mjc-render-fixture', function(scale, mode)
     messages['mjc-media-details']('{"title":"泰坦尼克号","filename":"fixture.mkv","container":"mkv"}')
     observers.duration('duration', 10578)
     observers['time-pos']('time-pos', 864)
+    observers['demuxer-cache-state']('demuxer-cache-state', {['seekable-ranges'] = {
+        {start = 0, ['end'] = 3702.3}, {start = 6875.7, ['end'] = 8462.4},
+    }})
     observers.pause('pause', mode == 'paused')
     observers['mouse-pos']('mouse-pos', mouse)
     if mode == 'sub' or mode == 'letterbox' then messages['mjc-key-down']('S') end
@@ -49,5 +53,9 @@ register_message('mjc-render-fixture', function(scale, mode)
         local dimensions = native_property('osd-dimensions')
         mouse = {x = dimensions.w * 0.45, y = dimensions.h - 99}
         observers['mouse-pos']('mouse-pos', mouse)
+    end
+    for i = 1, 30 do
+        local name, value = debug.getupvalue(render_bar, i)
+        if name == 'state' then set_native_property('user-data/mjc-render-seek', value.seek); break end
     end
 end)
