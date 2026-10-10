@@ -29,6 +29,8 @@
 | `src/store/settings.ts`、`src/pages/Settings.tsx` | 设置定义、默认值、持久化和设置界面 |
 | `src/components/UpdateCheck.tsx`、`src/api/appUpdates.ts`、`src/platform/appUpdates.ts`、`src-tauri/src/app_updates.rs` | 手动检查 GitHub 正式 Release、版本比较和固定发布页的系统浏览器入口 |
 | `src/store/libraryPreferences.ts`、`src/utils/librarySort.ts`、`src/components/LibrarySortMenu.tsx` | 媒体库排序字段、独立升降序、按服务器/账号/媒体库持久化及排序菜单 |
+| `src/components/BrowsePageHost.tsx`、`src/hooks/useBrowseActivity.ts`、`src/utils/browseHistory.ts` | 全部路由类型的页面实例保留、滚动位置恢复、活动状态及用户数据变更通知 |
+| `src/components/LibraryFilterDialog.tsx`、`src/utils/libraryFilters.ts`、`src/hooks/useAutoPagination.ts` | 媒体库分类/收藏入口、服务器筛选、URL 条件和可取消的自动分页 |
 | `src/pages/Home.tsx`、`src/pages/Library.tsx` | 首页分类、最新内容、媒体库、合集和分页 |
 | `src/pages/Search.tsx` | 媒体搜索、失败重试和迟到响应保护；轮播搜索按钮通过 `serverId` 查询参数指定当前主页的服务器范围 |
 | `src/utils/listPresentation.ts` | 列表元信息、预览图片、HDR/分辨率、文件夹排序 |
@@ -106,6 +108,16 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
 11. 已识别服务器的 `Authorization` 和 `X-Emby-Authorization` 必须使用同一协议前缀：Emby 使用 `Emby`，Jellyfin 使用 `MediaBrowser`。账号密码通过 `/Users/AuthenticateByName` 的 `Username` / `Pw` 换取服务器返回的 `AccessToken`，原样按服务器保存；客户端不生成、散列或跨应用借用令牌，也不为刷新令牌擅自重置持久设备 ID。
 12. 编辑 Emby 连接可显式勾选「重新登记此服务器的登录设备」，并填写该连接的客户端名称、重新输入密码。仅该连接生成新的 `deviceId`，成功登录后与 `clientName` 一起保存；失败保留原连接。之后登录、缓存/重建 API、播放协商和流 URL 共用此固定 ID，客户端名称优先使用连接的覆盖值，版本及设备名称仍来自对应产品设置。其他连接和原有全局设备 ID 保持稳定；普通删除、添加、编辑和重新登录不自动重置设备身份。该选项用于服务端按首次设备登记限制播放的兼容情况，不应自动替用户选择客户端名称。
 
+## 页面保留与浏览筛选
+
+全部路由类型经 `BrowsePageHost` 保留最近 20 个页面实例和 DOM，不将页面数据、媒体图片 URL 或位置写入持久化存储。切换页面时隐藏旧页面，保存并恢复各个垂直/横向滚动容器的位置；数据已加载时返回不重查第一页，保留分页、搜索、设置页标签和媒体库筛选。连续切换媒体共用一个播放器页面实例，播放会话仍每次重新建立。服务器/账号 API 身份变化时清除相关旧页面；正常刷新服务器元数据复用同一 API，服务器管理页的本地表单不因 API 刷新而重新挂载，避免刷新与卸载循环导致添加/编辑失效。
+
+隐藏页面通过 `useBrowseActivity` 停止自动分页、轮播、背景发布、快捷键和未完成的媒体查询；重新显示只补发被取消的请求。离开原生或浏览器播放器仍取消协商、停止播放并解除监听，不能因页面保留而后台播放。图片背景仍遵循原有路由/实例隔离。添加/编辑服务器弹窗的快捷键只在其页面活动时执行。
+
+媒体库提供全部媒体、收藏、类型与风格、标签四个入口及筛选面板。Jellyfin 使用 `/Items/Filters` 取得包含年份的选项；Emby 使用官方客户端的 `/Genres`（音乐库为 `/MusicGenres`）、`/Tags`、`/Years` 独立接口，按账号、媒体库和媒体类型查询，分页读取全部选项，兼容 `Items` 查询结果和直接数组、`Name` 对象及年份名称字符串。只有独立接口不支持（404/405/501）且其他接口无鉴权、网络或解析错误时，才回退到旧 `/Items/Filters`；多个并行失败需全部检查，不能由先返回的 404 掩盖其他 401/403。不要对所有 Emby 版本直接套用 Jellyfin 筛选接口，也不从已加载的第一页推算完整选项。按 `Genres`/`Tags` 的管道分隔、`Years` 的逗号分隔和 `Filters=IsFavorite` 在服务器筛选，同组多选满足其一，跨组同时生效。条件保存在当前路由查询参数中，返回恢复；全部分页沿用排序和筛选，切换时取消并忽略旧响应。空选项、搜索无匹配、无符合条件媒体和加载失败分别显示，筛选选项和分页均支持重试，保留 BoxSet 成员浏览及文件夹优先。
+
+媒体库/人物作品的垂直列表和首页横向行接近末尾时自动请求下一批；保留原生「加载更多」作为手动及无 IntersectionObserver 环境的备用入口。请求防重，失败停止自动重试，离开页面取消。分页偏移按服务端返回条目数推进，项目按 ID 去重，不把空页反复加载。收藏/已看操作同步更新已保留列表及详情；在收藏列表取消收藏时移除对应项目并调整偏移和总数。
+
 ## 手动检查更新
 
 「设置 → 通用 → 关于与更新」显示当前运行版本，只有点击「检查更新」才请求公开仓库的 `/releases/latest`，不在启动、打开设置或后台自动检查，不下载或安装更新。桌面版本来自 Tauri `getVersion`，浏览器版本来自打包的 `package.json`。只比较非草稿、非预发布的正式 Release；按语义版本数值及预发布规则比较，不将低版本提示为更新。无正式 Release、无需更新、新版本、超时、网络/限流及无效响应分别显示，可手动重试。检查期间防止重复请求，离开通用设置取消并忽略迟到结果；结果不持久化。GitHub 请求不附带媒体账号、令牌或鉴权头。发布页仅打开本项目固定的 GitHub Release URL；Windows 使用 `open_project_releases` 命令调用默认浏览器，不接受任意 URL 或程序参数。
@@ -169,6 +181,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 ```
 
 `test:home` 覆盖全部分类、8 个合集、成员浏览、多页加载、重试和取消；排序回归使用真实 React/Chromium 验证独立字段与方向、返回及重启恢复、服务器/账号/媒体库隔离、分页取消与迟到响应、菜单焦点及普通/窄窗口和 100% / 125% / 150% DPI。`test:servers` 使用本地 HTTP fixture，并用真实 Chromium 检查登录接收端看到的统一 UA、默认鉴权标识和手动覆盖；`test:playback` 覆盖关闭、元数据标题及慢网络生命周期；`test:settings` 覆盖真实组件、偏好和 3 秒迁移。Rust/Lua 测试覆盖原生输入、启动重试、TLS、截图目录回退、真实 GPU/ASS 渲染、毛玻璃像素效果和截图隔离、开播窗口比例及响应式控件，需本地 mpv 和 Windows 环境；`client_identity` 原生测试覆盖共享标识与实际 Windows 平台的 UA 格式。Rust 回归同时运行 Lua 控件交互测试；原生控件渲染使用 `scripts/test-player-osc-render.lua` 的合成媒体状态，不读取账号或服务器截图。
+`test:home` 中的 Issue #2 回归使用真实 React 路由/Chromium，检查保留同一 DOM、自动加载后全部项目、首页/媒体库/搜索/设置的垂直与横向返回位置、服务端类型/标签/年份/收藏组合、加载失败与重试、取消与迟到响应、收藏同步、筛选 Esc、账号隔离及普通/窄窗口和不同 DPI。服务器管理回归测量按钮真实命中、打开添加/编辑弹窗、输入并保存，以及 API 更新不重置表单或造成刷新循环；`test:servers` 另用真实 HTTP fixture 验证元数据刷新复用 API。NativePlayer 活动/隐藏/再激活回归使用真实 React 组件和完全模拟的 Tauri IPC，验证取消、停止、解除快捷键和新播放会话，不能将它描述为新的真实 mpv 渲染验证。
 播放诊断回归覆盖脱敏、完整响应体中的 HTTP 错误、独立编号、取消后的迟到响应、日志轮转与满队列非阻塞；真实 mpv 从本地 HTTP 522 fixture 接收日志事件并与 `end-file/error` 关联。
 
 `test-mpv-setup.ps1` 在 Windows PowerShell 5.1 下使用离线传输 fixture 和真实 `tar.exe` 验证缺失下载、完整资源复用、部分资源修复、控制脚本保留、校验失败、架构与压缩包检查、安装回滚和临时目录清理，不使用账号或访问网络。

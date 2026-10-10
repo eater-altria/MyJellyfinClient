@@ -11,6 +11,8 @@ import HeroCarousel from '../components/HeroCarousel';
 import LiquidGlass from '../components/LiquidGlass';
 import { EmptyState, ErrorState, Spinner } from '../components/Feedback';
 import { IconServer } from '../components/icons';
+import { useBrowseActivity } from '../hooks/useBrowseActivity';
+import { subscribeBrowseUserData } from '../utils/browseHistory';
 
 const COLLECTION_TYPE_CN: Record<string, string> = {
   movies: '电影',
@@ -51,6 +53,7 @@ export default function HomePage() {
 }
 
 function ServerHome({ serverId }: { serverId: string }) {
+  const active = useBrowseActivity();
   const navigate = useNavigate();
   const settings = useSettings();
   const api = useMemo<MediaServerApi | null>(
@@ -68,9 +71,12 @@ function ServerHome({ serverId }: { serverId: string }) {
   const backdropOwner = useRef({});
   const backdropActive = useRef(true);
   const lastHeroItem = useRef<BaseItem | null>(null);
+  const initialized = useRef(-1);
+  const rowsRef = useRef(itemsByView); rowsRef.current = itemsByView;
+  const viewsRef = useRef(views); viewsRef.current = views;
 
   const loadView = useCallback(async (view: BaseItem, offset = 0) => {
-    if (!api || requests.current.has(view.Id)) return;
+    if (!api || !active || requests.current.has(view.Id)) return;
     const controller = new AbortController();
     requests.current.set(view.Id, controller);
     const currentGeneration = generation.current;
@@ -100,7 +106,7 @@ function ServerHome({ serverId }: { serverId: string }) {
     } finally {
       if (requests.current.get(view.Id) === controller) requests.current.delete(view.Id);
     }
-  }, [api]);
+  }, [api, active]);
 
   const heroItems = useMemo(() => [...new Map(views.flatMap(view => itemsByView[view.Id]?.items ?? [])
     .map(item => [item.Id, item])).values()]
@@ -108,21 +114,21 @@ function ServerHome({ serverId }: { serverId: string }) {
 
   const handleHeroChange = useCallback((item: BaseItem | null) => {
     lastHeroItem.current = item;
-    if (!backdropActive.current) return;
+    if (!active || !backdropActive.current) return;
     const url = api && settings.showPreviewImage && !loading && !viewsError && item
       ? api.backdropUrl(item, 1920) : null;
     useAppBackdrop.getState().setBackdrop(backdropOwner.current, `/server/${serverId}`, url);
-  }, [api, serverId, settings.showPreviewImage, loading, viewsError]);
+  }, [api, serverId, settings.showPreviewImage, loading, viewsError, active]);
 
   useEffect(() => {
-    backdropActive.current = true;
+    backdropActive.current = active;
     // Replay after StrictMode's cleanup, including when the child's effect ran first.
     handleHeroChange(lastHeroItem.current);
     return () => {
       backdropActive.current = false;
       useAppBackdrop.getState().clearBackdrop(backdropOwner.current);
     };
-  }, [handleHeroChange]);
+  }, [handleHeroChange, active]);
 
   useEffect(() => {
     if (!heroItems.length || !settings.showPreviewImage || loading || viewsError) {
@@ -131,13 +137,21 @@ function ServerHome({ serverId }: { serverId: string }) {
   }, [heroItems.length, settings.showPreviewImage, loading, viewsError]);
 
   useEffect(() => {
-    if (!api) return;
+    if (!api || !active) return;
     let mounted = true;
     generation.current++;
     const controller = new AbortController();
-    setLoading(true); setViewsError(false); setViews([]); setItemsByView({});
+    const resumed = initialized.current === retry;
+    if (!resumed) { setLoading(true); setViewsError(false); setViews([]); setItemsByView({}); }
 
     (async () => {
+      if (resumed) {
+        for (const view of [...viewsRef.current, RESUME_VIEW, NEXT_VIEW]) {
+          const row = rowsRef.current[view.Id];
+          if (!row || row.loading) void loadView(view, row?.offset ?? 0);
+        }
+        return;
+      }
       let viewList: BaseItem[] = [];
       try {
         const res = await api.getUserViews(controller.signal);
@@ -148,6 +162,7 @@ function ServerHome({ serverId }: { serverId: string }) {
       if (!mounted) return;
       setViews(viewList);
       setLoading(false);
+      initialized.current = retry;
 
       const jobs: Promise<void>[] = [];
       // One paginated query per category supplies both its row and cover art.
@@ -165,7 +180,13 @@ function ServerHome({ serverId }: { serverId: string }) {
       for (const request of requests.current.values()) request.abort();
       requests.current.clear();
     };
-  }, [api, serverId, retry, loadView]);
+  }, [api, serverId, retry, loadView, active]);
+
+  useEffect(() => subscribeBrowseUserData((owner, id, fields) => {
+    if (owner !== api) return;
+    setItemsByView(previous => Object.fromEntries(Object.entries(previous).map(([key, row]) => [key, { ...row,
+      items: row.items.map(item => item.Id === id ? { ...item, UserData: { ...item.UserData, ...fields } } : item) }])));
+  }), [api]);
 
   if (!api) {
     return (
@@ -220,7 +241,7 @@ function ServerHome({ serverId }: { serverId: string }) {
       ) : (
         <>
           {settings.showPreviewImage && <div>
-            <HeroCarousel api={api} items={heroItems} serverId={serverId} onCurrentItemChange={handleHeroChange} />
+            <HeroCarousel api={api} items={heroItems} serverId={serverId} onCurrentItemChange={handleHeroChange} active={active} />
           </div>}
 
           {(views.length > 0 || !!resumeRow?.items.length || !!resumeRow?.error || !!nextRow?.items.length || !!nextRow?.error) && (

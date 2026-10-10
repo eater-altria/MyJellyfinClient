@@ -11,9 +11,12 @@ import EpisodeRow from '../components/EpisodeRow';
 import LiquidGlass from '../components/LiquidGlass';
 import { EmptyState, ErrorState, Spinner } from '../components/Feedback';
 import { IconChevronLeft } from '../components/icons';
+import { useBrowseActivity } from '../hooks/useBrowseActivity';
+import { useAutoPagination } from '../hooks/useAutoPagination';
 
 /** Full cast, recommendations, season episodes, or a person's paginated filmography. */
 export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 'person' | 'episodes' }) {
+  const active = useBrowseActivity();
   const { serverId, itemId, personId, seasonId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -29,6 +32,8 @@ export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 
   const [error, setError] = useState('');
   const [moreError, setMoreError] = useState('');
   const [retry, setRetry] = useState(0);
+  const completed = useRef('');
+  const page = useRef<HTMLDivElement>(null);
   const backdropOwner = useRef({});
   const backdropScope = kind === 'person' ? null : `/server/${serverId}/item/${itemId}`;
   // Capture the parent's artwork during render, before its unmount cleanup releases ownership.
@@ -44,11 +49,16 @@ export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 
 
   useEffect(() => {
     const owner = backdropOwner.current;
+    if (!active) return;
     useAppBackdrop.getState().setBackdrop(owner, location.pathname, showPreviewImage ? backdropUrl : null);
     return () => useAppBackdrop.getState().clearBackdrop(owner);
-  }, [backdropUrl, location.pathname, showPreviewImage]);
+  }, [backdropUrl, location.pathname, showPreviewImage, active]);
 
   useEffect(() => {
+    if (!active) return;
+    const signature = JSON.stringify([kind, itemId, personId, seasonId, retry]);
+    if (completed.current === signature) return;
+    completed.current = '';
     let cancelled = false;
     const controller = new AbortController();
     setSource(null);
@@ -71,8 +81,8 @@ export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 
       }
       const [detail, result] = await Promise.all([
         api.getItem(id, controller.signal),
-        kind === 'person' ? api.getPersonItems(id) :
-          kind === 'similar' ? api.getSimilar(id, null) :
+        kind === 'person' ? api.getPersonItems(id, 0, 60, controller.signal) :
+          kind === 'similar' ? api.getSimilar(id, null, controller.signal) :
             kind === 'episodes' ? api.getEpisodes(itemId!, seasonId, controller.signal) : Promise.resolve(null),
       ]);
       if (cancelled) return;
@@ -83,16 +93,17 @@ export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 
     })().catch((e) => {
       if (!cancelled) setError(String(e));
     }).finally(() => {
-      if (!cancelled) setLoading(false);
+      if (!cancelled) { completed.current = signature; setLoading(false); }
     });
     return () => { cancelled = true; controller.abort(); };
-  }, [api, itemId, personId, seasonId, kind, retry, backdropScope, inheritedBackdrop?.scope]);
+  }, [api, itemId, personId, seasonId, kind, retry, backdropScope, inheritedBackdrop?.scope, active]);
 
   // A separate effect cancels pagination responses when navigating to another person.
   useEffect(() => {
-    if (!loadingMore || !api || !personId || kind !== 'person') return;
+    if (!active || !loadingMore || !api || !personId || kind !== 'person') return;
+    const controller = new AbortController();
     let cancelled = false;
-    api.getPersonItems(personId, items.length).then((result) => {
+    api.getPersonItems(personId, items.length, 60, controller.signal).then((result) => {
       if (cancelled) return;
       setItems((previous) => [...previous, ...result.Items]);
       setTotal(result.Items.length ? result.TotalRecordCount : items.length);
@@ -101,10 +112,12 @@ export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 
     }).finally(() => {
       if (!cancelled) setLoadingMore(false);
     });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); setLoadingMore(false); };
     // The page offset is captured when loadingMore becomes true.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, personId, kind, loadingMore]);
+  }, [api, personId, kind, loadingMore, active]);
+  const loadNext = useMemo(() => () => { setMoreError(''); setLoadingMore(true); }, []);
+  const sentinel = useAutoPagination(page, active && kind === 'person' && !loading && !loadingMore && !moreError && items.length < total, loadNext);
 
   const title = kind === 'cast' ? '演职人员' : kind === 'similar' ? '类似作品' : kind === 'episodes' ? '全部剧集' : '参演及参与作品';
   const openItem = (item: BaseItem) => {
@@ -113,7 +126,7 @@ export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 
   };
 
   return (
-    <div className="h-full overflow-y-auto px-5 pb-10 lg:px-8">
+    <div ref={page} className="h-full overflow-y-auto px-5 pb-10 lg:px-8">
       <LiquidGlass intensity="subtle" className="sticky top-4 z-20 my-4 flex min-h-16 items-center gap-3 rounded-[24px] px-4 py-3">
         <button onClick={() => navigate(-1)} title="返回" aria-label="返回" className="glass-icon-button h-9 w-9 shrink-0">
           <IconChevronLeft size={18} />
@@ -143,7 +156,7 @@ export default function DetailCollection({ kind }: { kind: 'cast' | 'similar' | 
             </div>
           ) : <EmptyState title="暂无作品" hint="服务器媒体库中暂无可显示的作品。" />}
           {kind === 'person' && items.length < total && (
-            <div className="mt-6 text-center">
+            <div ref={sentinel} className="mt-6 text-center">
               {moreError && <p className="mb-2 text-sm text-red-500">{moreError}</p>}
               <button disabled={loadingMore} onClick={() => { setMoreError(''); setLoadingMore(true); }}
                 className="glass-button px-5 py-2.5 text-sm disabled:opacity-50">

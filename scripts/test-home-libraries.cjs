@@ -5,7 +5,7 @@ const esbuild = require('esbuild');
 function load(file, imports = {}) {
   const code = esbuild.transformSync(fs.readFileSync(file, 'utf8'), { loader: file.endsWith('.tsx') ? 'tsx' : 'ts', format: 'cjs', jsx: 'automatic' }).code;
   const module = {exports:{}};
-  new Function('require','module','exports',code)(name => imports[name] ?? require(name),module,module.exports);
+  new Function('require','module','exports',code)(name => imports[name] ?? (name === '../hooks/useBrowseActivity' ? { useBrowseActivity: () => true } : name === '../hooks/useAutoPagination' ? { useAutoPagination: () => ({current:null}) } : name === '../utils/browseHistory' ? load('src/utils/browseHistory.ts') : name === '../utils/libraryFilters' ? load('src/utils/libraryFilters.ts') : name === '../components/LibraryFilterDialog' ? {default:'FilterDialog'} : require(name)),module,module.exports);
   return module.exports;
 }
 const identity = load('src/utils/clientIdentity.ts', { './defaultClientIdentity.json': require('../src/utils/defaultClientIdentity.json') });
@@ -47,6 +47,7 @@ const backdropState=()=>backdrop.useAppBackdrop.getState();
 const servers=Object.assign(selector=>selector({servers:[{id:'server',name:'Fixture',address:'https://fixture'}],apis:{server:api}}),{getState:()=>({getApi:()=>api})});
 const presentation=load('src/utils/listPresentation.ts',{'../api/mediaServer':media});
 function renderHarness(file,params) {
+  let searchParams = new URLSearchParams();
   let cursor=0;const hooks=[],effects=[];
   const changed=(previous,deps)=>!previous||deps.some((value,i)=>!Object.is(value,previous[i]));
   const react={
@@ -58,7 +59,7 @@ function renderHarness(file,params) {
   react.useCallback=(fn,deps)=>react.useMemo(()=>fn,deps);
   const component=load(file,{
     react,'react/jsx-runtime':{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})},
-    'react-router-dom':{useParams:()=>params,useNavigate:()=>path=>navigation.push(path)},
+    'react-router-dom':{useParams:()=>params,useNavigate:()=>path=>navigation.push(path),useSearchParams:()=>[searchParams,next=>{searchParams=new URLSearchParams(next);}]},
     '../api/mediaServer':media,'../utils/listPresentation':presentation,
     '../store/servers':{useServers:servers},'../store/settings':{useSettings:selector=>selector?selector(settings):settings},
     '../store/libraryPreferences':{useLibraryPreferences:selector=>selector(preferences)},'../utils/librarySort':librarySort,

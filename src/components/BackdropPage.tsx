@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useAppBackdrop } from '../store/appBackdrop';
 import { useSettings } from '../store/settings';
+import { useBrowseActivity } from '../hooks/useBrowseActivity';
 
 /** Scenic detail-page backdrop; foreground glass surfaces keep text legible. */
 export default function BackdropPage({
@@ -17,15 +18,17 @@ export default function BackdropPage({
   header?: React.ReactNode;
 }) {
   const location = useLocation();
+  const active = useBrowseActivity();
   const showPreviewImage = useSettings((settings) => settings.showPreviewImage);
   const bg = showPreviewImage && item ? api.backdropUrl(item, 1920) : null;
   const backdropOwner = useRef({});
 
   useEffect(() => {
     const owner = backdropOwner.current;
+    if (!active) return;
     useAppBackdrop.getState().setBackdrop(owner, location.pathname, showPreviewImage ? bg : null);
     return () => useAppBackdrop.getState().clearBackdrop(owner);
-  }, [bg, location.pathname, showPreviewImage]);
+  }, [bg, location.pathname, showPreviewImage, active]);
 
   return (
     <div className="relative isolate h-full overflow-y-auto">

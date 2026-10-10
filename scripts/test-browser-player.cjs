@@ -12,6 +12,7 @@ const settings = { autoHideControlsSeconds: 3, autoLockOnPause: true, mouseLeftC
   showSwitchMediaButton: true, showScreenshotButton: true };
 const useSettings = Object.assign(() => settings, { getState: () => settings });
 const modules = {
+    '../hooks/useBrowseActivity': { useBrowseActivity: () => true },
   react: {
     useState: initial => {
       const i = stateIndex++;

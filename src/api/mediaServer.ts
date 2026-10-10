@@ -4,6 +4,7 @@
  *   Authorization / X-Emby-Authorization: Emby (or MediaBrowser for Jellyfin) Client="...", ...
  */
 import { DEFAULT_CLIENT_IDENTITY, resolveClientIdentity, type ClientIdentity } from '../utils/clientIdentity';
+import { updateBrowseUserData } from '../utils/browseHistory';
 
 export type ServerProtocol = 'jellyfin' | 'emby';
 export const serverProtocolName = (protocol?: ServerProtocol) => protocol === 'emby' ? 'Emby' : 'Jellyfin';
@@ -120,6 +121,7 @@ export interface BaseItem {
   CriticRating?: number;
   RunTimeTicks?: number;
   Genres?: string[];
+  Tags?: string[];
   Studios?: { Name: string }[];
   People?: Person[];
   MediaSources?: MediaSource[];
@@ -192,6 +194,23 @@ function authHeader(identity: ClientIdentity, token?: string, protocol: ServerPr
   if (userId) parts.push(`UserId="${encodeURIComponent(userId)}"`);
   if (token) parts.push(`Token="${encodeURIComponent(token)}"`);
   return `${protocol === 'emby' ? 'Emby' : 'MediaBrowser'} ${parts.join(', ')}`;
+}
+
+export interface LibraryFilterOptions { genres: string[]; tags: string[]; years: number[]; }
+
+export function normalizeLibraryFilters(value: unknown): LibraryFilterOptions {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('服务器返回的筛选信息无效');
+  const fields = value as Record<string, unknown>;
+  if (!['Genres', 'Tags', 'Years'].some(key => Array.isArray(fields[key]))) throw new Error('服务器返回的筛选信息无效');
+  const names = (key: string) => {
+    if (!Array.isArray(fields[key])) return [];
+    return [...new Set(fields[key].flatMap((entry: unknown) => {
+      const name = typeof entry === 'string' ? entry : entry && typeof entry === 'object' && 'Name' in entry ? entry.Name : null;
+      return typeof name === 'string' && name.trim() ? [name] : [];
+    }))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  };
+  return { genres: names('Genres'), tags: names('Tags'), years: Array.isArray(fields.Years)
+    ? [...new Set(fields.Years.filter((year: unknown): year is number => typeof year === 'number' && Number.isInteger(year) && year >= 1000 && year <= 9999))].sort((a, b) => b - a) : [] };
 }
 
 /** Public discovery sends client metadata, never account credentials. */
@@ -354,15 +373,15 @@ export class MediaServerApi {
 
   getItem(itemId: string, signal?: AbortSignal): Promise<BaseItem> {
     return this.get(`/Users/${this.userId}/Items/${itemId}`, {
-      Fields: LIST_ITEM_FIELDS + ',People,Genres,Studios',
+      Fields: LIST_ITEM_FIELDS + ',People,Genres,Tags,Studios',
     }, signal);
   }
 
-  getSeasons(seriesId: string): Promise<ItemsResult> {
+  getSeasons(seriesId: string, signal?: AbortSignal): Promise<ItemsResult> {
     return this.get(`/Shows/${seriesId}/Seasons`, {
       UserId: this.userId,
       Fields: LIST_ITEM_FIELDS,
-    });
+    }, signal);
   }
 
   getEpisodes(seriesId: string, seasonId?: string, signal?: AbortSignal): Promise<ItemsResult> {
@@ -373,15 +392,64 @@ export class MediaServerApi {
     }, signal);
   }
 
-  getSimilar(itemId: string, limit: number | null = 12): Promise<ItemsResult> {
+  async getLibraryFilters(parentId: string, includeItemTypes?: string, signal?: AbortSignal): Promise<LibraryFilterOptions> {
+    const scope = { UserId: this.userId, ParentId: parentId, IncludeItemTypes: includeItemTypes };
+    const legacy = async () => normalizeLibraryFilters(await this.get<unknown>('/Items/Filters', scope, signal));
+    // Jellyfin's legacy filter endpoint supplies years; Filters2 does not on
+    // all supported versions. Current Emby uses separate named-item services.
+    if (this.protocol !== 'emby') return legacy();
+    const namedItems = async (path: string) => {
+      const names = new Set<string>();
+      const limit = 100;
+      let startIndex = 0;
+      while (!signal?.aborted) {
+        const value = await this.get<unknown>(path, { ...scope, Recursive: true, EnableImages: false,
+          EnableUserData: false, EnableTotalRecordCount: true, Limit: limit, StartIndex: startIndex }, signal);
+        const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+        const items = Array.isArray(value) ? value : record?.Items ?? record?.items;
+        if (!Array.isArray(items)) throw new Error('服务器返回的筛选信息无效');
+        const before = names.size;
+        let validNames = 0;
+        for (const item of items) {
+          const name = typeof item === 'string' || typeof item === 'number' ? String(item)
+            : item && typeof item === 'object' ? item.Name ?? item.name : null;
+          if (typeof name === 'string' && name.trim()) { names.add(name); validNames++; }
+        }
+        if (items.length && !validNames) throw new Error('服务器返回的筛选信息无效');
+        startIndex += items.length;
+        const total = record?.TotalRecordCount ?? record?.totalRecordCount;
+        // Some versions return an unwrapped array or ignore paging. Detect a
+        // repeated page by its names rather than repeatedly fetching forever.
+        if (!items.length || names.size === before || (typeof total === 'number' && Number.isFinite(total) && total >= 0
+          ? startIndex >= total : items.length < limit)) break;
+      }
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      return [...names];
+    };
+    const music = includeItemTypes?.split(',').every(type => ['MusicAlbum', 'Audio', 'MusicVideo', 'MusicArtist'].includes(type));
+    const results = await Promise.allSettled([
+      namedItems(music ? '/MusicGenres' : '/Genres'), namedItems('/Tags'), namedItems('/Years'),
+    ]);
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    // Inspect every failure: a fast 404 must not hide a simultaneous 401/403
+    // from another named service by silently selecting a legacy endpoint.
+    const failure = results.find(result => result.status === 'rejected'
+      && !(result.reason instanceof ApiError && [404, 405, 501].includes(result.reason.status)));
+    if (failure?.status === 'rejected') throw failure.reason;
+    if (results.some(result => result.status === 'rejected')) return legacy();
+    const [genres, tags, years] = results.map(result => result.status === 'fulfilled' ? result.value : []);
+    return normalizeLibraryFilters({ Genres: genres, Tags: tags, Years: years.filter(year => /^\d{4}$/.test(year)).map(Number) });
+  }
+
+  getSimilar(itemId: string, limit: number | null = 12, signal?: AbortSignal): Promise<ItemsResult> {
     return this.get(`/Items/${itemId}/Similar`, {
       UserId: this.userId,
       Limit: limit,
       Fields: LIST_ITEM_FIELDS,
-    });
+    }, signal);
   }
 
-  getPersonItems(personId: string, startIndex = 0, limit = 60): Promise<ItemsResult> {
+  getPersonItems(personId: string, startIndex = 0, limit = 60, signal?: AbortSignal): Promise<ItemsResult> {
     return this.queryItems({
       PersonIds: personId,
       Recursive: true,
@@ -391,10 +459,10 @@ export class MediaServerApi {
       SortOrder: 'Descending',
       StartIndex: startIndex,
       Limit: limit,
-    });
+    }, signal);
   }
 
-  search(term: string, limit = 48): Promise<ItemsResult> {
+  search(term: string, limit = 48, signal?: AbortSignal): Promise<ItemsResult> {
     return this.get(`/Users/${this.userId}/Items`, {
       SearchTerm: term,
       Recursive: true,
@@ -402,10 +470,10 @@ export class MediaServerApi {
       IncludeItemTypes: 'Movie,Series,Episode',
       Fields: LIST_ITEM_FIELDS,
       ImageTypeLimit: 1,
-    });
+    }, signal);
   }
 
-  getPlayedItems(limit = 60): Promise<ItemsResult> {
+  getPlayedItems(limit = 60, signal?: AbortSignal): Promise<ItemsResult> {
     return this.get(`/Users/${this.userId}/Items`, {
       Recursive: true,
       Filters: 'IsPlayed',
@@ -414,7 +482,7 @@ export class MediaServerApi {
       SortOrder: 'Descending',
       Limit: limit,
       Fields: LIST_ITEM_FIELDS,
-    });
+    }, signal);
   }
 
   // ---------- Playback ----------
@@ -514,16 +582,16 @@ export class MediaServerApi {
   }
 
   markPlayed(itemId: string): Promise<void> {
-    return this.post(`/Users/${this.userId}/PlayedItems/${itemId}`);
+    return this.post(`/Users/${this.userId}/PlayedItems/${itemId}`).then(() => updateBrowseUserData(this, itemId, { Played: true }));
   }
 
   markUnplayed(itemId: string): Promise<void> {
-    return this.del(`/Users/${this.userId}/PlayedItems/${itemId}`);
+    return this.del(`/Users/${this.userId}/PlayedItems/${itemId}`).then(() => updateBrowseUserData(this, itemId, { Played: false }));
   }
 
   setFavorite(itemId: string, fav: boolean): Promise<void> {
-    if (fav) return this.post(`/Users/${this.userId}/FavoriteItems/${itemId}`).then(() => {});
-    return this.del(`/Users/${this.userId}/FavoriteItems/${itemId}`);
+    const request = fav ? this.post(`/Users/${this.userId}/FavoriteItems/${itemId}`) : this.del(`/Users/${this.userId}/FavoriteItems/${itemId}`);
+    return request.then(() => updateBrowseUserData(this, itemId, { IsFavorite: fav }));
   }
 
   /** External (sidecar) subtitle URLs playable by mpv via --sub-file. */

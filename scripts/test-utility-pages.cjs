@@ -8,7 +8,7 @@ function load(file, imports = {}) {
     loader: file.endsWith('.tsx') ? 'tsx' : 'ts', format: 'cjs', jsx: 'automatic',
   }).code;
   const module = { exports: {} };
-  new Function('require', 'module', 'exports', code)(name => imports[name] ?? require(name), module, module.exports);
+  new Function('require', 'module', 'exports', code)(name => imports[name] ?? (name === '../hooks/useBrowseActivity' ? { useBrowseActivity: () => true } : name === '../hooks/useAutoPagination' ? { useAutoPagination: () => ({current:null}) } : name === '../utils/browseHistory' ? load('src/utils/browseHistory.ts') : name === '../utils/libraryFilters' ? load('src/utils/libraryFilters.ts') : name === '../components/LibraryFilterDialog' ? {default:'FilterDialog'} : require(name)), module, module.exports);
   return module.exports;
 }
 

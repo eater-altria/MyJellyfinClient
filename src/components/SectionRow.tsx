@@ -2,6 +2,8 @@ import { useRef } from 'react';
 import { useSettings } from '../store/settings';
 import LiquidGlass from './LiquidGlass';
 import ListNavigation from './ListNavigation';
+import { useAutoPagination } from '../hooks/useAutoPagination';
+import { useBrowseActivity } from '../hooks/useBrowseActivity';
 
 /** Content-first horizontal section with a compact glass navigation cluster. */
 export default function SectionRow({
@@ -20,6 +22,8 @@ export default function SectionRow({
   glass?: boolean;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
+  const active = useBrowseActivity();
+  const sentinel = useAutoPagination(scroller, active && !!onLoadMore, onLoadMore, true);
   const showCount = useSettings((settings) => settings.showItemCountInTitle);
 
   const content = (
@@ -36,10 +40,11 @@ export default function SectionRow({
         style={{ scrollbarWidth: 'none' }}
         onScroll={e => {
           const el = e.currentTarget;
-          if (el.scrollWidth - el.scrollLeft - el.clientWidth < 180) onLoadMore?.();
+          if (active && el.scrollWidth - el.scrollLeft - el.clientWidth < 180) onLoadMore?.();
         }}
       >
         {children}
+        {onLoadMore && <div ref={sentinel} className="w-px shrink-0" aria-hidden="true" />}
       </div>
     </>
   );

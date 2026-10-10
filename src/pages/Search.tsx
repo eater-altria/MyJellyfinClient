@@ -8,8 +8,11 @@ import PosterCard from '../components/PosterCard';
 import { EmptyState, ErrorState, Spinner } from '../components/Feedback';
 import { IconClose, IconSearch } from '../components/icons';
 import LiquidGlass from '../components/LiquidGlass';
+import { useBrowseActivity } from '../hooks/useBrowseActivity';
+import { browseOwnerId } from '../utils/browseHistory';
 
 export default function SearchPage() {
+  const active = useBrowseActivity();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const showCount = useSettings((settings) => settings.showItemCountInTitle);
@@ -33,10 +36,17 @@ export default function SearchPage() {
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const seq = useRef(0);
+  const completed = useRef('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Debounced search
   useEffect(() => {
+    if (!active) return;
+    const signature = JSON.stringify([browseOwnerId(api), serverId, term.trim(), retry]);
+    if (completed.current === signature) return;
+    completed.current = '';
+    completed.current = '';
+    const controller = new AbortController();
     const mySeq = ++seq.current;
     const q = term.trim();
     setError(null);
@@ -48,23 +58,25 @@ export default function SearchPage() {
     setSearching(true);
     const t = window.setTimeout(() => {
       api
-        .search(q)
+        .search(q, 48, controller.signal)
         .then((r) => {
           if (seq.current !== mySeq) return;
+          completed.current = signature;
           setResults(r.Items);
           setSearching(false);
         })
         .catch(() => {
           if (seq.current !== mySeq) return;
+          completed.current = signature;
           setError('搜索未完成，请检查服务器连接后重试。');
           setSearching(false);
         });
     }, 400);
     return () => {
-      window.clearTimeout(t);
+      window.clearTimeout(t); controller.abort();
       if (seq.current === mySeq) seq.current++;
     };
-  }, [term, api, retry]);
+  }, [term, api, retry, active]);
 
   const open = (item: BaseItem) => {
     if (!serverId) return;

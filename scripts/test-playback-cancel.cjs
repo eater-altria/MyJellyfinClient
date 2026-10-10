@@ -58,6 +58,7 @@ function mount(protocol, pending) {
     dispatchEvent: event => { keys.get(event.type)?.(event); return !event.defaultPrevented; },
   };
   const modules = {
+    '../hooks/useBrowseActivity': { useBrowseActivity: () => true },
     react: { useEffect: fn => effects.push(fn), useRef: current => ({ current }),
       useState: initial => [initial, value => states.push(value)] },
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },

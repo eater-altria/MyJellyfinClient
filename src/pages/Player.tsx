@@ -27,6 +27,7 @@ import { preferredTrack } from '../player/trackSelection';
 import { PLAYER_EXIT_EVENT } from '../player/exitPlayback';
 import { mediaTitle, usePlaybackTitle } from '../player/playbackTitle';
 import LiquidGlass from '../components/LiquidGlass';
+import { useBrowseActivity } from '../hooks/useBrowseActivity';
 import '../player/liquid-glass.css';
 
 const DIRECT_PLAY_CONTAINERS = ['mp4', 'm4v', 'mkv', 'mov', 'webm'];
@@ -211,6 +212,7 @@ function VolumeSlider({
 }
 
 export default function PlayerPage() {
+  const active = useBrowseActivity();
   const { serverId, itemId } = useParams<{ serverId: string; itemId: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -347,7 +349,7 @@ export default function PlayerPage() {
 
   // ---------- Load item + playback info, wire up the source ----------
   useEffect(() => {
-    if (!serverId || !itemId) return;
+    if (!active || !serverId || !itemId) return;
     generationRef.current++;
     switchingRef.current = false;
     corsRetriedRef.current = false;
@@ -461,10 +463,11 @@ export default function PlayerPage() {
       video?.load();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId, itemId]);
+  }, [serverId, itemId, active]);
 
   // ---------- Progress reporting + stop reporting ----------
   useEffect(() => {
+    if (!active) return;
     const id = window.setInterval(() => {
       const api = apiRef.current;
       const v = videoRef.current;
@@ -494,10 +497,10 @@ export default function PlayerPage() {
       window.removeEventListener('beforeunload', onUnload);
       reportStopped();
     };
-  }, [itemId, serverId]);
+  }, [itemId, serverId, active]);
 
   // ---------- Keyboard shortcuts ----------
-  useEffect(() => bindBrowserPlaybackKeys(window, () => videoRef.current, () => useSettings.getState(), {
+  useEffect(() => active ? bindBrowserPlaybackKeys(window, () => videoRef.current, () => useSettings.getState(), {
     togglePlay, fullscreen: toggleFullscreen, activity: poke,
     exit: () => {
           if (controlsMenuRef.current) { showControlsMenu(false); poke(); return; }
@@ -508,16 +511,18 @@ export default function PlayerPage() {
             navigate(-1);
           }
     },
-  }), [navigate, poke, togglePlay, toggleFullscreen, setFullscreen]);
+  }) : undefined, [navigate, poke, togglePlay, toggleFullscreen, setFullscreen, active]);
 
   useEffect(() => {
+    if (!active) return;
     const onClose = (event: Event) => { event.preventDefault(); navigate(-1); };
     window.addEventListener(PLAYER_EXIT_EVENT, onClose);
     return () => window.removeEventListener(PLAYER_EXIT_EVENT, onClose);
-  }, [navigate]);
+  }, [navigate, active]);
 
   // ---------- Browser fullscreen sync + initial hide timer ----------
   useEffect(() => {
+    if (!active) return;
     const onFsChange = () => setFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', onFsChange);
     poke();
@@ -525,7 +530,7 @@ export default function PlayerPage() {
       document.removeEventListener('fullscreenchange', onFsChange);
       window.clearTimeout(hideTimerRef.current);
     };
-  }, [poke, setFullscreen]);
+  }, [poke, setFullscreen, active]);
 
   // ---------- Video event handlers ----------
   const handleLoadedMetadata = () => {

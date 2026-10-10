@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { useBrowseActivity } from '../hooks/useBrowseActivity';
 import { useServers, ServerRegistrationError, type SavedServer } from '../store/servers';
 import { ApiError, serverProtocolName, type ServerProtocol } from '../api/mediaServer';
 import { IconClose, IconJellyfin, IconEmby } from './icons';
@@ -19,6 +20,7 @@ function errorMessage(e: unknown): string {
 
 /** Modal dialog for adding or editing a Jellyfin / Emby server. */
 export default function AddServerDialog({ onClose, server }: { onClose: () => void; server?: SavedServer }) {
+  const active = useBrowseActivity();
   const addServer = useServers((s) => s.addServer);
   const updateServer = useServers((s) => s.updateServer);
   const [name, setName] = useState(server?.name ?? '');
@@ -41,6 +43,7 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
+      if (!active) return;
       if (event.key === 'Escape' && !loading) {
         event.preventDefault();
         onClose();
@@ -60,7 +63,7 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [loading, onClose]);
+  }, [loading, onClose, active]);
 
   const canSubmit = address.trim() !== '' && username.trim() !== '' && !loading;
 

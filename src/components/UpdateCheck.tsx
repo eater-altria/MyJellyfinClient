@@ -2,13 +2,19 @@ import { useEffect, useRef, useState } from 'react';
 import { checkForAppUpdate, RELEASES_PAGE_URL, type UpdateCheckResult } from '../api/appUpdates';
 import { currentAppVersion, openProjectReleases } from '../platform/appUpdates';
 import { isTauri } from '../platform/window';
+import { useBrowseActivity } from '../hooks/useBrowseActivity';
 
 export default function UpdateCheck() {
+  const active = useBrowseActivity();
   const [version, setVersion] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<UpdateCheckResult | null>(null);
   const [error, setError] = useState('');
   const request = useRef<AbortController | null>(null);
+  useEffect(() => {
+    if (active) return;
+    request.current?.abort(); request.current = null; setChecking(false);
+  }, [active]);
 
   useEffect(() => {
     let active = true;
@@ -18,7 +24,7 @@ export default function UpdateCheck() {
   }, []);
 
   const check = async () => {
-    if (!version || request.current) return;
+    if (!active || !version || request.current) return;
     const controller = new AbortController();
     request.current = controller;
     setChecking(true); setResult(null); setError('');

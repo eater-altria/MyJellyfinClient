@@ -3,12 +3,14 @@ import { createPortal } from 'react-dom';
 import { LIBRARY_SORT_OPTIONS, type LibrarySort } from '../utils/librarySort';
 import { IconArrowDown, IconArrowUp, IconClose, IconSort } from './icons';
 import LiquidGlass from './LiquidGlass';
+import { useBrowseActivity } from '../hooks/useBrowseActivity';
 
 export default function LibrarySortMenu({ value, onChange }: {
   value: LibrarySort;
   onChange: (value: LibrarySort) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const active = useBrowseActivity();
   const [position, setPosition] = useState<CSSProperties>({ position: 'fixed' });
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -17,7 +19,7 @@ export default function LibrarySortMenu({ value, onChange }: {
   const direction = value.order === 'Ascending' ? '升序' : '降序';
 
   useEffect(() => {
-    if (!open) return;
+    if (!active || !open) return;
     const place = () => {
       const bounds = trigger.current?.getBoundingClientRect();
       if (!bounds) return;
@@ -57,7 +59,7 @@ export default function LibrarySortMenu({ value, onChange }: {
       document.removeEventListener('focusin', outside);
       document.removeEventListener('keydown', escape);
     };
-  }, [open]);
+  }, [open, active]);
 
   const close = () => { setOpen(false); trigger.current?.focus(); };
   const radioClass = 'flex min-h-9 cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-[13px] text-text-primary hover:bg-white/60 has-[:checked]:bg-accent-soft';
@@ -73,7 +75,7 @@ export default function LibrarySortMenu({ value, onChange }: {
         {value.order === 'Ascending' ? <IconArrowUp size={16} aria-hidden="true" /> : <IconArrowDown size={16} aria-hidden="true" />}
         <span className="sr-only">{direction}</span>
       </button>
-      {open && createPortal(
+      {active && open && createPortal(
         <div ref={panel} style={position} className="z-50">
           <LiquidGlass id={id} role="dialog" aria-labelledby={`${id}-title`} className="rounded-[24px]">
             <div className="overflow-y-auto p-3" style={{ maxHeight: position.maxHeight }}>

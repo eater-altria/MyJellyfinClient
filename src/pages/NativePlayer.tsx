@@ -10,6 +10,7 @@ import type { BaseItem } from '../api/mediaServer';
 import { PLAYER_EXIT_EVENT } from '../player/exitPlayback';
 import { mediaTitle, usePlaybackTitle } from '../player/playbackTitle';
 import LiquidGlass from '../components/LiquidGlass';
+import { useBrowseActivity } from '../hooks/useBrowseActivity';
 import '../player/liquid-glass.css';
 
 interface PositionPayload {
@@ -50,6 +51,7 @@ function mapSubLang(pref: string): string | null {
 /** Native mpv-backed player page (Tauri). The web UI sits behind the embedded
  * mpv child window; this page only coordinates playback + media-server reporting. */
 export default function NativePlayer() {
+  const active = useBrowseActivity();
   const { serverId, itemId } = useParams<{ serverId: string; itemId: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -59,7 +61,7 @@ export default function NativePlayer() {
   const [diagnosticId, setDiagnosticId] = useState('');
 
   useEffect(() => {
-    if (!serverId || !itemId) return;
+    if (!active || !serverId || !itemId) return;
     let cancelled = false;
     let started = false;
     let loaded = false;
@@ -338,7 +340,7 @@ export default function NativePlayer() {
       if (playbackRequested) invoke('stop_playback').catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId, itemId]);
+  }, [serverId, itemId, active]);
 
   return (
     <div className="player-surface player-native-stage relative flex h-full w-full flex-col items-center justify-center bg-black px-6 text-white/50">

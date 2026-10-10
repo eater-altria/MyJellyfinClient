@@ -8,7 +8,7 @@ const { renderToStaticMarkup } = require('react-dom/server');
 function load(file, imports = {}) {
   const code = esbuild.transformSync(fs.readFileSync(file, 'utf8'), { loader: file.endsWith('.tsx') ? 'tsx' : 'ts', format: 'cjs', jsx: 'automatic' }).code;
   const module = { exports: {} };
-  new Function('require', 'module', 'exports', code)((name) => imports[name] ?? require(name), module, module.exports);
+  new Function('require', 'module', 'exports', code)((name) => imports[name] ?? (name === '../hooks/useBrowseActivity' ? { useBrowseActivity: () => true } : name === '../hooks/useAutoPagination' ? { useAutoPagination: () => ({current:null}) } : name === '../utils/browseHistory' ? load('src/utils/browseHistory.ts') : name === '../utils/libraryFilters' ? load('src/utils/libraryFilters.ts') : name === '../components/LibraryFilterDialog' ? {default:'FilterDialog'} : require(name)), module, module.exports);
   return module.exports;
 }
 
@@ -185,7 +185,7 @@ async function checkLibraryQueries() {
     '../api/mediaServer': media,
     react,
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
-    'react-router-dom': { useParams: () => ({ serverId: 'server', libraryId: 'library' }), useNavigate: () => () => {} },
+    'react-router-dom': { useParams: () => ({ serverId: 'server', libraryId: 'library' }), useNavigate: () => () => {}, useSearchParams: (()=>{const search=new URLSearchParams();return ()=>[search,()=>{}];})() },
     '../store/servers': { useServers: Object.assign(selector => selector({apis:{server:libraryApi}}), { getState: () => ({ getApi: () => libraryApi }) }) },
     '../store/libraryPreferences': { useLibraryPreferences: selector => selector({sorts:{},setSort(){}}) },
     '../utils/librarySort': librarySort,

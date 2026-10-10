@@ -10,11 +10,13 @@ export default function HeroCarousel({
   items,
   serverId,
   onCurrentItemChange,
+  active = true,
 }: {
   api: MediaServerApi;
   items: BaseItem[];
   serverId: string;
   onCurrentItemChange?: (item: BaseItem | null) => void;
+  active?: boolean;
 }) {
   const navigate = useNavigate();
   const [index, setIndex] = useState(0);
@@ -37,10 +39,10 @@ export default function HeroCarousel({
   );
 
   useEffect(() => {
-    if (paused || count < 2) return;
+    if (!active || paused || count < 2) return;
     const t = setInterval(() => go(1), 7000);
     return () => clearInterval(t);
-  }, [paused, count, go]);
+  }, [paused, count, go, active]);
 
   // Keep index in range when the item list changes
   useEffect(() => {

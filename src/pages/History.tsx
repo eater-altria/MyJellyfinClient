@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useBrowseActivity } from '../hooks/useBrowseActivity';
+import { browseOwnerId } from '../utils/browseHistory';
 import { useNavigate } from 'react-router-dom';
 import { BaseItem } from '../api/mediaServer';
 import { useServers } from '../store/servers';
@@ -25,6 +27,7 @@ function dayLabel(iso: string): string {
 }
 
 export default function HistoryPage() {
+  const active = useBrowseActivity();
   const navigate = useNavigate();
   const showCount = useSettings((settings) => settings.showItemCountInTitle);
   const foldersFirst = useSettings((settings) => settings.sortFoldersSeparately);
@@ -37,18 +40,24 @@ export default function HistoryPage() {
   const [items, setItems] = useState<BaseItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
+  const completed = useRef('');
 
   useEffect(() => {
+    const signature = JSON.stringify([browseOwnerId(api), retry]);
+    if (!active || completed.current === signature) return;
+    completed.current = '';
+    completed.current = '';
+    const controller = new AbortController();
     let cancelled = false;
     setItems(null);
     setError(null);
     if (!api) return;
     api
-      .getPlayedItems(60)
-      .then((r) => { if (!cancelled) setItems(r.Items); })
-      .catch(() => { if (!cancelled) setError('无法加载播放记录，请检查服务器连接后重试。'); });
-    return () => { cancelled = true; };
-  }, [api, retry]);
+      .getPlayedItems(60, controller.signal)
+      .then((r) => { if (!cancelled) { completed.current = signature; setItems(r.Items); } })
+      .catch(() => { if (!cancelled) completed.current = signature; if (!cancelled) setError('无法加载播放记录，请检查服务器连接后重试。'); });
+    return () => { cancelled = true; controller.abort(); };
+  }, [api, retry, active]);
 
   const groups = useMemo<Group[]>(() => {
     if (!items || items.length === 0) return [];

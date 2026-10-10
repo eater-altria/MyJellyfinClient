@@ -87,6 +87,7 @@ try {
     },
   };
   const imports = {
+    '../hooks/useBrowseActivity': { useBrowseActivity: () => true },
     react, 'react-router-dom': { useLocation: () => ({ pathname }) },
     '../store/appBackdrop': { useAppBackdrop: selector => selector(store.getState()) },
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },

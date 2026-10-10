@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { useBrowseActivity } from '../hooks/useBrowseActivity';
+import { browseOwnerId, subscribeBrowseUserData } from '../utils/browseHistory';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { BaseItem, formatTime, ticksToSeconds } from '../api/mediaServer';
 import { useServers } from '../store/servers';
@@ -16,6 +18,7 @@ import { Spinner, EmptyState, ErrorState } from '../components/Feedback';
 import { IconChevronLeft, IconHome, IconPlay, IconHeart, IconCheck } from '../components/icons';
 
 export default function SeriesDetailPage() {
+  const active = useBrowseActivity();
   const { serverId, itemId } = useParams<{ serverId: string; itemId: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -30,6 +33,7 @@ export default function SeriesDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const completed = useRef(''), seasonsCompleted = useRef(''), episodesCompleted = useRef('');
 
   const [seasons, setSeasons] = useState<BaseItem[]>([]);
   const selectedSeason = seasons.find((season) => season.Id === searchParams.get('seasonId'))
@@ -44,7 +48,10 @@ export default function SeriesDetailPage() {
 
   // Load series item + similar
   useEffect(() => {
-    if (!api || !itemId) return;
+    const signature = JSON.stringify([browseOwnerId(api), itemId, tick]);
+    if (!api || !itemId || !active || completed.current === signature) return;
+    completed.current = '';
+    const controller = new AbortController();
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -52,11 +59,11 @@ export default function SeriesDetailPage() {
     setSeasons([]);
     setEpisodes([]);
     (async () => {
-      const it = await api.getItem(itemId);
+      const it = await api.getItem(itemId, controller.signal);
       if (cancelled) return;
       setItem(it);
       try {
-        const sim = await api.getSimilar(itemId, 12);
+        const sim = await api.getSimilar(itemId, 12, controller.signal);
         if (!cancelled) setSimilar(sim.Items ?? []);
       } catch {
         if (!cancelled) setSimilar([]);
@@ -66,31 +73,36 @@ export default function SeriesDetailPage() {
         if (!cancelled) setError(String(e));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) { completed.current = signature; setLoading(false); }
       });
     return () => {
-      cancelled = true;
+      cancelled = true; controller.abort();
     };
-  }, [api, itemId, tick]);
+  }, [api, itemId, tick, active]);
 
   // Load seasons, pick default (first non-special, else first)
   useEffect(() => {
-    if (!api || !itemId) return;
+    const signature = JSON.stringify([browseOwnerId(api), itemId, tick]);
+    if (!api || !itemId || !active || seasonsCompleted.current === signature) return;
+    seasonsCompleted.current = '';
+    const controller = new AbortController();
     let cancelled = false;
     (async () => {
-      const res = await api.getSeasons(itemId);
+      const res = await api.getSeasons(itemId, controller.signal);
       if (cancelled) return;
       const list = res.Items ?? [];
-      setSeasons(list);
+      setSeasons(list); seasonsCompleted.current = signature;
     })().catch(() => {});
     return () => {
-      cancelled = true;
+      cancelled = true; controller.abort();
     };
-  }, [api, itemId, tick]);
+  }, [api, itemId, tick, active]);
 
   // Load episodes for the selected season; derive the "next episode" from the default season
   useEffect(() => {
-    if (!api || !itemId || !seasonId) return;
+    const signature = JSON.stringify([browseOwnerId(api), itemId, seasonId, episodesRetry, tick]);
+    if (!api || !itemId || !seasonId || !active || episodesCompleted.current === signature) return;
+    episodesCompleted.current = '';
     let cancelled = false;
     const controller = new AbortController();
     setEpisodesLoading(true);
@@ -100,7 +112,7 @@ export default function SeriesDetailPage() {
       const res = await api.getEpisodes(itemId, seasonId, controller.signal);
       if (cancelled) return;
       const eps = res.Items ?? [];
-      setEpisodes(eps);
+      setEpisodes(eps); episodesCompleted.current = signature;
       setNextEp(
         (prev) =>
           prev ??
@@ -120,7 +132,12 @@ export default function SeriesDetailPage() {
       cancelled = true;
       controller.abort();
     };
-  }, [api, itemId, seasonId, episodesRetry]);
+  }, [api, itemId, seasonId, episodesRetry, active, tick]);
+  useEffect(() => subscribeBrowseUserData((owner, id, fields) => {
+    if (owner !== api) return;
+    setItem(previous => previous?.Id === id ? { ...previous, UserData: { ...previous.UserData, ...fields } } : previous);
+    setEpisodes(previous => previous.map(episode => episode.Id === id ? { ...episode, UserData: { ...episode.UserData, ...fields } } : episode));
+  }), [api]);
 
   if (!api) {
     return (

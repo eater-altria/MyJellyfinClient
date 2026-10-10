@@ -170,6 +170,11 @@ const server = http.createServer(async (req,res) => {
   const state=useServers.getState();
   const savedJf=await state.addServer(origin+'/jf','tester','test-password','My Jellyfin');
   const savedEmby=await state.addServer(origin+'/proxy','tester','test-password','My Emby');
+  for (const connection of [savedJf, savedEmby]) {
+    const existing = useServers.getState().getApi(connection.id);
+    await useServers.getState().refreshServer(connection.id);
+    assert.equal(useServers.getState().getApi(connection.id), existing, 'Refreshing metadata must preserve the API and retained page identity');
+  }
   assert.equal(savedEmby.protocol,'emby');assert.equal(savedEmby.address,emby.address);assert.equal(savedEmby.name,'My Emby');
   assert.equal(useServers.getState().getApi(savedJf.id).protocol,'jellyfin');assert.equal(useServers.getState().getApi(savedEmby.id).protocol,'emby');
   const persisted=JSON.parse(storage.get('mjc:servers'));assert.equal(persisted.state.servers[1].protocol,'emby');

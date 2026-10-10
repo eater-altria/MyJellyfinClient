@@ -154,10 +154,13 @@ export const useServers = create<ServersState>()(
       async refreshServer(id) {
         const s = get().servers.find((x) => x.id === id);
         if (!s) return;
-        const api = makeApi(s);
+        const cached = get().apis[id];
+        const api = cached && cached.baseUrl === s.address && cached.token === s.token
+          && cached.userId === s.userId && cached.protocol === (s.protocol ?? 'jellyfin') ? cached : makeApi(s);
         const stillCurrent = () => {
           const current = get().servers.find((x) => x.id === id);
-          return current?.address === s.address && current.token === s.token && current.protocol === s.protocol;
+          return current?.address === s.address && current.token === s.token && current.protocol === s.protocol
+            && current.userId === s.userId && current.deviceId === s.deviceId && current.clientName === s.clientName;
         };
         try {
           const views = await api.getUserViews();

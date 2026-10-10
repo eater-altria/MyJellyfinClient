@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useBrowseActivity } from '../hooks/useBrowseActivity';
+import { browseOwnerId, subscribeBrowseUserData } from '../utils/browseHistory';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   BaseItem,
@@ -20,6 +22,7 @@ import { Spinner, EmptyState, ErrorState } from '../components/Feedback';
 import { IconChevronLeft, IconHome, IconPlay, IconHeart, IconCheck } from '../components/icons';
 
 export default function MovieDetailPage() {
+  const active = useBrowseActivity();
   const { serverId, itemId } = useParams<{ serverId: string; itemId: string }>();
   const navigate = useNavigate();
   const resumeFromLastPosition = useSettings((s) => s.resumeFromLastPosition);
@@ -31,18 +34,22 @@ export default function MovieDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const completed = useRef('');
 
   useEffect(() => {
-    if (!api || !itemId) return;
+    const signature = JSON.stringify([browseOwnerId(api), itemId, tick]);
+    if (!api || !itemId || !active || completed.current === signature) return;
+    completed.current = '';
+    const controller = new AbortController();
     let cancelled = false;
     setLoading(true);
     setError(null);
     (async () => {
-      const it = await api.getItem(itemId);
+      const it = await api.getItem(itemId, controller.signal);
       if (cancelled) return;
       setItem(it);
       try {
-        const sim = await api.getSimilar(itemId, 12);
+        const sim = await api.getSimilar(itemId, 12, controller.signal);
         if (!cancelled) setSimilar(sim.Items ?? []);
       } catch {
         if (!cancelled) setSimilar([]);
@@ -52,12 +59,15 @@ export default function MovieDetailPage() {
         if (!cancelled) setError(String(e));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) { completed.current = signature; setLoading(false); }
       });
     return () => {
-      cancelled = true;
+      cancelled = true; controller.abort();
     };
-  }, [api, itemId, tick]);
+  }, [api, itemId, tick, active]);
+  useEffect(() => subscribeBrowseUserData((owner, id, fields) => {
+    if (owner === api) setItem(previous => previous?.Id === id ? { ...previous, UserData: { ...previous.UserData, ...fields } } : previous);
+  }), [api]);
 
   if (!api) {
     return (
