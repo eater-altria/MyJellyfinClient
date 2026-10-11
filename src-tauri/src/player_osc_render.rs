@@ -118,6 +118,130 @@ fn decoder_geometry_resizes_the_hidden_host_during_startup() {
 }
 
 #[test]
+fn real_host_input_recovers_after_repeated_osc_autohide() {
+    check_real_host_autohide_input(false);
+    check_real_host_autohide_input(true);
+}
+
+fn check_real_host_autohide_input(danmaku_enabled: bool) {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_owned();
+    unsafe { register_host_class(); }
+    let parent = unsafe { CreateWindowExW(0, wide(HOST_CLASS).as_ptr(), std::ptr::null(), 0,
+        0, 0, 640, 360, std::ptr::null_mut(), std::ptr::null_mut(), GetModuleHandleW(std::ptr::null()), std::ptr::null()) };
+    assert!(!parent.is_null());
+    let host = unsafe { create_host_window(parent, 0) };
+    struct Windows(isize, HWND);
+    impl Drop for Windows { fn drop(&mut self) { unsafe { DestroyWindow(self.0 as HWND); DestroyWindow(self.1); } } }
+    let _windows = Windows(host, parent);
+    let pipe_path = format!("\\\\.\\pipe\\mjc-input-hide-{}-{}", std::process::id(), NEXT_SESSION_ID.fetch_add(1, Ordering::SeqCst));
+    let mpv = mpv_exe_path().unwrap();
+    let args = vec!["--no-config".into(), "--load-scripts=no".into(), "--vo=gpu-next".into(), "--ao=null".into(),
+        "--osc=no".into(), "--idle=yes".into(), "--force-window=immediate".into(), "--force-media-title=Input fixture".into(),
+        format!("--wid={host}"), format!("--input-ipc-server={pipe_path}"),
+        format!("--script={}", root.join("src-tauri/resources/mpv/portable_config/scripts/mjc-osc.lua").display())];
+    let process = unsafe { spawn_hosted_tracked(&mpv, &args, &root) }.unwrap();
+    struct Process(StartedProcess);
+    impl Drop for Process { fn drop(&mut self) { if self.0.exit_code().is_none() { self.0.terminate(); } } }
+    let _process = Process(process);
+    let connect = || {
+        for _ in 0..100 {
+            if let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(&pipe_path) { return file; }
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        panic!("input fixture IPC did not start");
+    };
+    let mut events = connect();
+    write_json(&mut events, &json!({"command":["observe_property",1,"pause"]})).unwrap();
+    let commands = command_sender(connect(), None);
+    let data = Box::new(MpvHostData { pipe: commands.clone(), last_move: Instant::now() - Duration::from_secs(1),
+        high_surrogate: None, mouse_captured: false, captured_cursor: CursorKind::Default,
+        cursor_zones: Arc::new(Mutex::new(Vec::new())), fullscreen: Arc::new(AtomicBool::new(false)) });
+    unsafe { SetWindowLongPtrW(host as HWND, GWLP_USERDATA, Box::into_raw(data) as isize); }
+    let (send, receive) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(events).lines().map_while(Result::ok) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) { let _ = send.send(value); }
+        }
+    });
+    let wait_for = |predicate: &dyn Fn(&serde_json::Value) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let event = receive.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("host input/OSC event did not arrive");
+            if predicate(&event) { return event; }
+        }
+    };
+    let zones = |event: &serde_json::Value| event["args"][0] == "mjc-cursor-zones";
+    pipe_write(&commands, json!({"command":["script-message","mjc-settings","{\"autoHideControlsSeconds\":0.3,\"showPlayTitleToast\":false,\"showSwitchMediaButton\":false,\"showSkipButtons\":false}"]}));
+    pipe_write(&commands, json!({"command":["loadfile","av://lavfi:testsrc=size=320x180:rate=10:duration=30"]}));
+    wait_for(&|event| event["event"] == "file-loaded");
+    wait_for(&|event| zones(event) && event["args"][1] != "[]");
+    unsafe {
+        let child = find_mpv_window(host) as HWND;
+        assert!(!child.is_null(), "real mpv child must exist after media readiness");
+        let style = GetWindowLongPtrW(child, GWL_STYLE);
+        // Simulate mpv replacing/re-enabling its window after decoder setup.
+        SetWindowLongPtrW(child, GWL_STYLE, style & !(WS_DISABLED as isize));
+        SendMessageW(host as HWND, WM_TIMER, INPUT_RECOVERY_TIMER, 0);
+        assert_ne!(GetWindowLongPtrW(child, GWL_STYLE) & WS_DISABLED as isize, 0,
+            "late/reconfigured mpv child must return input ownership to the native host");
+    }
+    if danmaku_enabled {
+        pipe_write(&commands, json!({"command":["script-message","mjc-danmaku-begin","{\"danmakuEnabled\":true}","Synthetic load"]}));
+        // UTF-8 chunks larger than a pipe buffer reproduce the real broadcast
+        // deadlock; short ASCII comments can hide it even at the item limit.
+        let comments: Vec<_> = (0..50_000).map(|i| json!({"time":i as f64 * 0.08,"mode":1,"color":16777215,
+            "text":format!("{} {i}", "真实中文弹幕".repeat(10))})).collect();
+        for chunk in comments.chunks(40) {
+            pipe_write(&commands, json!({"command":["script-message","mjc-danmaku-chunk",serde_json::to_string(chunk).unwrap()]}));
+        }
+        pipe_write(&commands, json!({"command":["script-message","mjc-danmaku-end"]}));
+    }
+    for step in 0..8 {
+        wait_for(&|event| zones(event) && event["args"][1] == "[]");
+        unsafe { SendMessageW(host as HWND, WM_KEYDOWN, 0x20, 0); SendMessageW(host as HWND, WM_KEYUP, 0x20, 0); }
+        wait_for(&|event| event["name"] == "pause" && event["data"] == true);
+        let point = ((120 + step) << 16) | (220 + step);
+        unsafe { SendMessageW(host as HWND, WM_MOUSEMOVE, 0, point); }
+        let visible = wait_for(&|event| zones(event) && event["args"][1] != "[]");
+        // Use the actual OSC hit regions, so the click exercises Win32 -> IPC
+        // -> Lua hit testing after every hide/wake cycle, including bulk data.
+        let hit_regions: Vec<CursorZone> = serde_json::from_str(visible["args"][1].as_str().unwrap()).unwrap();
+        let mut buttons: Vec<_> = hit_regions.iter().filter(|z|
+            (z.x1 - z.x0 - 34.0).abs() < 0.1 && (z.y1 - z.y0 - 52.0).abs() < 0.1
+        ).collect();
+        buttons.sort_by(|a, b| a.x0.total_cmp(&b.x0));
+        assert!(buttons.len() >= 4, "play, danmaku, fullscreen and more remain clickable");
+        let press = |zone: &CursorZone, message| unsafe {
+            let x = ((zone.x0 + zone.x1) / 2.0) as isize;
+            let y = ((zone.y0 + zone.y1) / 2.0) as isize;
+            let point = (y << 16) | x;
+            SendMessageW(host as HWND, message, 0, point);
+            SendMessageW(host as HWND, WM_LBUTTONUP, 0, point);
+        };
+        let click = |zone: &CursorZone| press(zone, WM_LBUTTONDOWN);
+        click(buttons[0]); // With optional transport buttons off, this is play.
+        wait_for(&|event| event["name"] == "pause" && event["data"] == false);
+        // Windows replaces the second down event of rapid clicks with DBLCLK.
+        // That press must still operate a button instead of disappearing.
+        press(buttons[0], WM_LBUTTONDBLCLK);
+        wait_for(&|event| event["name"] == "pause" && event["data"] == true);
+        click(buttons[0]);
+        wait_for(&|event| event["name"] == "pause" && event["data"] == false);
+        click(buttons[buttons.len() - 2]); // Fullscreen is immediately left of more.
+        wait_for(&|event| event["args"][0] == "mjc-fullscreen");
+        for key in [VK_RETURN, 0x46] {
+            unsafe {
+                SendMessageW(host as HWND, WM_KEYDOWN, key as usize, 0);
+                SendMessageW(host as HWND, WM_KEYUP, key as usize, 0);
+            }
+            wait_for(&|event| event["args"][0] == "mjc-fullscreen");
+        }
+    }
+    pipe_write(&commands, json!({"command":["quit"]}));
+}
+
+#[test]
 fn real_mpv_controller_renders_at_wide_small_and_high_dpi_sizes() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_owned();
     let dir = std::env::var_os("MJC_TEST_OSC_RENDER_DIR").map(std::path::PathBuf::from)
@@ -130,7 +254,9 @@ fn real_mpv_controller_renders_at_wide_small_and_high_dpi_sizes() {
         (1280, 720, 1.0, "hover"), (1280, 720, 1.0, "bright"),
         (1280, 720, 1.0, "letterbox"), (1280, 720, 1.0, "pillar"),
         (800, 450, 1.0, "default"), (480, 320, 1.0, "paused"),
-        (320, 240, 1.0, "sub"), (1000, 563, 1.25, "default"), (720, 480, 1.5, "sub"), (640, 480, 2.0, "default")] {
+        (320, 240, 1.0, "sub"), (1000, 563, 1.25, "default"), (720, 480, 1.5, "sub"), (640, 480, 2.0, "default"),
+        (1280, 720, 1.0, "danmaku"), (480, 320, 1.5, "danmaku"),
+        (1280, 720, 1.0, "danmaku-source"), (480, 320, 1.0, "danmaku-source"), (720, 480, 1.5, "danmaku-source")] {
         let parent = unsafe { CreateWindowExW(0, wide(HOST_CLASS).as_ptr(), std::ptr::null(), 0,
             0, 0, width, height, std::ptr::null_mut(), std::ptr::null_mut(), GetModuleHandleW(std::ptr::null()), std::ptr::null()) };
         assert!(!parent.is_null());
@@ -209,6 +335,11 @@ fn real_mpv_controller_renders_at_wide_small_and_high_dpi_sizes() {
         let w = i32::from_le_bytes(dib[4..8].try_into().unwrap());
         let h = -i32::from_le_bytes(dib[8..12].try_into().unwrap());
         assert_eq!((w, h), (width, height));
+        let red_danmaku_pixels = |image: &[u8]| image[40..40 + (width * (120.0 * scale) as i32 * 4) as usize]
+            .chunks_exact(4).filter(|p| p[2] > 190 && p[0] < 90 && p[1] < 90).count();
+        if mode == "danmaku" {
+            assert!(red_danmaku_pixels(&dib) > 100, "native ASS danmaku must paint actual red text at {scale} DPI");
+        }
         let opts = command(json!(["get_property", "glsl-shader-opts"]));
         let bar_top = (1..=6).find_map(|i| {
             let read = |name: &str| opts[format!("mjc-glass/r{i}_{name}")].as_str().unwrap().parse::<f64>().unwrap();
@@ -280,6 +411,9 @@ fn real_mpv_controller_renders_at_wide_small_and_high_dpi_sizes() {
         let capture = dir.join(format!("capture-{width}-{height}-{scale}-{mode}.png"));
         screenshot::capture_frame(&pipe_path, &capture, "subtitles").unwrap();
         let video_with_glass = screenshot::decode_dib(&capture).unwrap();
+        if mode == "danmaku" {
+            assert_eq!(red_danmaku_pixels(&video_with_glass), 0, "saved video screenshots must exclude the danmaku OSD");
+        }
         let mut disabled = opts.clone();
         disabled["mjc-glass/surface_count"] = json!("0");
         command(json!(["set_property", "glsl-shader-opts", disabled]));

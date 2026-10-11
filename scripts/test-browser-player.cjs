@@ -12,6 +12,8 @@ const settings = { autoHideControlsSeconds: 3, autoLockOnPause: true, mouseLeftC
   showSwitchMediaButton: true, showScreenshotButton: true };
 const useSettings = Object.assign(() => settings, { getState: () => settings });
 const modules = {
+  '../hooks/useDanmaku': { useDanmaku: () => ({ comments: [], choices: [], status: '', loading: false }) },
+  '../components/DanmakuCanvas': { default: function DanmakuCanvas() {} },
     '../hooks/useBrowseActivity': { useBrowseActivity: () => true },
   react: {
     useState: initial => {

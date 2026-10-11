@@ -183,6 +183,11 @@ export const IconDanmaku = (p: P) =>
     <path d="M9 10h.01M13 10h.01" />
   </>);
 
+export const IconDanmakuOff = (p: P) =>
+  base(p, <>
+    <path d="M8 6h8a4 4 0 0 1 3.7 5.5M15 14H9l-5 4V8M3 3l18 18" />
+  </>);
+
 export const IconMonitor = (p: P) =>
   base(p, <>
     <rect x="3" y="4" width="18" height="12" rx="2" />

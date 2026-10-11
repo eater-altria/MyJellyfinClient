@@ -16,8 +16,10 @@ pub fn run() {
             player::stop_playback,
             player::player_status,
             player::player_message,
+            player::player_danmaku,
             player::player_escape,
             player::player_keyboard_action,
+            player::player_keyboard_input,
             playback_diagnostics::record_playback_diagnostic,
             playback_diagnostics::get_playback_log_path,
         ])

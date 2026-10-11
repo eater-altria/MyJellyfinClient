@@ -54,18 +54,20 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, EnumChildWindows, GetClassNameW, GetClientRect,
-    GetWindowLongPtrW, GetWindowRect, GetCursorPos, GetParent, IsIconic, IsZoomed, IsWindowVisible, LoadCursorW, MoveWindow, RegisterClassW, WindowFromPoint, SendMessageW,
+    GetWindowLongPtrW, GetWindowRect, GetCursorPos, GetParent, GetForegroundWindow, IsChild, IsIconic, IsZoomed, IsWindowVisible, LoadCursorW, MoveWindow, RegisterClassW, WindowFromPoint, SendMessageW,
+    SetTimer, KillTimer, GetGUIThreadInfo, GUITHREADINFO,
     SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, GWL_STYLE, HTCLIENT, HWND_TOP, IDC_ARROW, IDC_HAND, IDC_IBEAM,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_SHOW, WNDCLASSW, WS_CHILD, WS_CLIPSIBLINGS, WS_DISABLED,
     WM_KEYDOWN, WM_KEYUP, WM_CHAR, WM_KILLFOCUS, WM_CAPTURECHANGED, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCDESTROY, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
+    WM_NCDESTROY, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER,
     WM_NCHITTEST, WM_NCLBUTTONDOWN, HTLEFT, HTRIGHT, HTTOP, HTBOTTOM, HTTOPLEFT, HTTOPRIGHT, HTBOTTOMLEFT, HTBOTTOMRIGHT,
 };
 
 const HOST_CLASS: &str = "MjcMpvHostWindow";
 /// Height of the custom title bar in CSS px (multiplied by scale factor).
 const TITLEBAR_CSS_PX: f64 = 36.0;
+const INPUT_RECOVERY_TIMER: usize = 0x4d4a43;
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 // ---------------------------------------------------------------------------
@@ -301,6 +303,7 @@ pub struct PlayerStatus {
 }
 
 struct MpvSession {
+    diagnostic_id: String,
     pid: u32,
     host_hwnd: isize,
     pipe: Sender<serde_json::Value>,
@@ -405,14 +408,18 @@ fn write_json(file: &mut std::fs::File, value: &serde_json::Value) -> std::io::R
 /// Commands use a separate connection from the blocking event reader. A cloned
 /// synchronous Windows handle still shares I/O serialization with its original:
 /// a pending ReadFile can prevent WriteFile from completing while mpv is paused.
-/// This worker alternates writes and replies on its own connection, also draining
-/// responses so mpv's output buffer cannot fill during mouse movement.
+/// This worker alternates writes and replies on its own connection. Unsolicited
+/// events belong only on the event reader: a large script-message broadcast can
+/// fill mpv's output pipe while we are writing the next danmaku chunk, deadlocking
+/// both writers before either side starts reading again.
 fn command_sender(file: std::fs::File, trace: Option<PlaybackTrace>) -> Sender<serde_json::Value> {
     let (sender, receiver) = mpsc::channel::<serde_json::Value>();
     std::thread::spawn(move || {
         let mut reader = BufReader::new(file);
         let mut request_id = 1000_u64;
-        for mut value in receiver {
+        // Wait for event suppression to be acknowledged before sending payloads.
+        let setup = json!({"command": ["disable_event", "all"]});
+        for mut value in std::iter::once(setup).chain(receiver) {
             let command = value["command"][0].as_str().unwrap_or("unknown").to_owned();
             request_id += 1;
             value["request_id"] = json!(request_id);
@@ -487,6 +494,7 @@ unsafe extern "system" fn host_wndproc(
             return SendMessageW(GetParent(hwnd), msg, wparam, lparam);
         }
         WM_NCDESTROY => {
+            KillTimer(hwnd, INPUT_RECOVERY_TIMER);
             if !data.is_null() {
                 drop(Box::from_raw(data));
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
@@ -500,6 +508,10 @@ unsafe extern "system" fn host_wndproc(
                 return 1;
             }
             return DefWindowProcW(hwnd, msg, wparam, lparam);
+        }
+        WM_TIMER if wparam == INPUT_RECOVERY_TIMER => {
+            recover_mpv_host_input(hwnd as isize);
+            return 0;
         }
         _ => {}
     }
@@ -517,22 +529,23 @@ unsafe extern "system" fn host_wndproc(
                 d.last_move = Instant::now();
                 let (x, y) = mouse_xy(lparam);
                 ipc(&d.pipe, json!({"command": ["mouse", x, y]}));
-                if d.mouse_captured {
-                    // Pass captured client coordinates directly. mpv's mouse
-                    // key sections may cancel their binding outside its area.
-                    ipc(&d.pipe, pointer_message("move", x, y));
-                }
+                // Wake the OSC directly even if mpv suppresses mouse-pos updates
+                // after cursor hiding. The same path also preserves capture.
+                ipc(&d.pipe, pointer_message("move", x, y));
             }
             0
         }
-        WM_LBUTTONDOWN => {
+        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
             SetFocus(hwnd);
             d.mouse_captured = true;
             let (x, y) = mouse_xy(lparam);
             d.captured_cursor = d.cursor_at(x, y);
             SetCapture(hwnd);
             ipc(&d.pipe, json!({"command": ["mouse", x, y]}));
-            ipc(&d.pipe, pointer_message("down", x, y));
+            // CS_DBLCLKS replaces the second button-down with DBLCLK. Forward
+            // that press (including capture); Lua distinguishes controls from
+            // the video background so rapid button clicks are not swallowed.
+            ipc(&d.pipe, pointer_message(if msg == WM_LBUTTONDBLCLK { "double" } else { "down" }, x, y));
             0
         }
         WM_LBUTTONUP => {
@@ -554,11 +567,6 @@ unsafe extern "system" fn host_wndproc(
             let (x, y) = mouse_xy(lparam);
             ipc(&d.pipe, json!({"command": ["mouse", x, y]}));
             ipc(&d.pipe, json!({"command": ["keyup", "MBTN_RIGHT"]}));
-            0
-        }
-        WM_LBUTTONDBLCLK => {
-            let (x, y) = mouse_xy(lparam);
-            ipc(&d.pipe, json!({"command": ["script-message", "mjc-double-click", x.to_string(), y.to_string()]}));
             0
         }
         WM_MOUSEWHEEL => {
@@ -686,6 +694,7 @@ unsafe fn create_host_window(parent: HWND, titlebar_px: i32) -> isize {
     if hwnd.is_null() {
         return 0;
     }
+    SetTimer(hwnd, INPUT_RECOVERY_TIMER, 250, None);
     // Make sure we sit above the WebView2 child window
     SetWindowPos(hwnd, HWND_TOP, 0, titlebar_px, rc.right - rc.left, rc.bottom - rc.top - titlebar_px, SWP_NOACTIVATE);
     hwnd as isize
@@ -790,15 +799,38 @@ pub struct StartOptions {
 /// Disable direct input on mpv's window (all input goes through the host)
 /// and give the host keyboard focus.
 unsafe fn prepare_mpv_window(host: isize) {
-    let mpv = find_mpv_window(host);
-    if mpv == 0 {
-        return;
-    }
-    let style = GetWindowLongPtrW(mpv as HWND, GWL_STYLE);
-    SetWindowLongPtrW(mpv as HWND, GWL_STYLE, style | WS_DISABLED as isize);
+    disable_mpv_child_input(host);
+    // The rendering child can appear after file-loaded; host keyboard focus
+    // must be established even when enumeration has not found that child yet.
     SetForegroundWindow(host as HWND);
     SetActiveWindow(host as HWND);
     SetFocus(host as HWND);
+}
+
+unsafe fn disable_mpv_child_input(host: isize) {
+    let mpv = find_mpv_window(host);
+    if mpv != 0 {
+        let style = GetWindowLongPtrW(mpv as HWND, GWL_STYLE);
+        if style & WS_DISABLED as isize == 0 {
+            SetWindowLongPtrW(mpv as HWND, GWL_STYLE, style | WS_DISABLED as isize);
+        }
+    }
+}
+
+/// Executed on the owning UI thread. Repair late/recreated rendering children
+/// without stealing focus from another app, a file dialog or the WebView.
+unsafe fn recover_mpv_host_input(host: isize) {
+    disable_mpv_child_input(host);
+    let hwnd = host as HWND;
+    let parent = GetParent(hwnd);
+    if IsWindowVisible(hwnd) == 0 || IsIconic(parent) != 0 || GetForegroundWindow() != parent { return; }
+    // GetFocus only sees this thread's input queue. Query the foreground queue
+    // so a WebView on another thread is not mistaken for "no focused window".
+    let mut info: GUITHREADINFO = std::mem::zeroed();
+    info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+    if GetGUIThreadInfo(0, &mut info) == 0 { return; }
+    let focused = info.hwndFocus;
+    if focused.is_null() || (focused != hwnd && IsChild(hwnd, focused) != 0) { SetFocus(hwnd); }
 }
 
 fn pipe_write(pipe: &Sender<serde_json::Value>, value: serde_json::Value) {
@@ -988,6 +1020,69 @@ pub fn start_playback(
     result
 }
 
+fn supported_player_keyboard_key(key: &str) -> bool {
+    matches!(key, "SPACE" | "ENTER" | "LEFT" | "RIGHT" | "UP" | "DOWN" | "M" | "F" | "A" | "S" | "BS")
+        || (key.len() == 1 && key.as_bytes()[0].is_ascii_digit())
+}
+
+#[tauri::command]
+pub fn player_keyboard_input(state: tauri::State<'_, PlayerState>, diagnostic_id: String, key: String, down: bool) -> bool {
+    if !supported_player_keyboard_key(&key) { return false; }
+    let guard = state.session.lock().unwrap();
+    if let Some(session) = guard.as_ref().filter(|s| s.diagnostic_id == diagnostic_id) {
+        pipe_write(&session.pipe, json!({"command": ["script-message", if down { "mjc-key-down" } else { "mjc-key-up" }, key]}));
+        true
+    } else { false }
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+pub struct DanmakuComment {
+    time: f64,
+    mode: u8,
+    color: u32,
+    text: String,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+pub struct DanmakuChoice {
+    id: String,
+    label: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    episode: String,
+}
+
+/// Scoped to the playback that requested the data. Pipe writes happen on the
+/// existing command worker; XML, URLs and credentials never reach mpv/Lua.
+#[tauri::command]
+pub fn player_danmaku(state: tauri::State<'_, PlayerState>, diagnostic_id: String,
+    comments: Vec<DanmakuComment>, settings: serde_json::Value,
+    choices: Vec<DanmakuChoice>, status: String) -> Result<bool, String> {
+    if comments.len() > 50_000 || comments.iter().any(|c| !c.time.is_finite() || c.time < 0.0 || c.time > 604800.0
+        || !matches!(c.mode, 1 | 4 | 5 | 6) || c.color > 0xffffff || c.text.chars().count() > 300)
+        || choices.len() > 20_000 || choices.iter().any(|c| c.id.chars().count() > 512 || c.label.chars().count() > 620
+            || c.title.chars().count() > 300 || c.episode.chars().count() > 300)
+        || status.len() > 2000 {
+        return Err("弹幕数据超出范围".into());
+    }
+    if comments.windows(2).any(|pair| pair[0].time > pair[1].time) {
+        return Err("弹幕时间顺序无效".into());
+    }
+    let guard = state.session.lock().unwrap();
+    let Some(session) = guard.as_ref().filter(|s| s.diagnostic_id == diagnostic_id) else { return Ok(false); };
+    // Bounded IPC lines avoid mpv's input line limit even for CJK content.
+    pipe_write(&session.pipe, json!({"command": ["script-message", "mjc-danmaku-begin", settings.to_string(), status]}));
+    for chunk in comments.chunks(40) {
+        pipe_write(&session.pipe, json!({"command": ["script-message", "mjc-danmaku-chunk", serde_json::to_string(chunk).unwrap()]}));
+    }
+    for chunk in choices.chunks(5) {
+        pipe_write(&session.pipe, json!({"command": ["script-message", "mjc-danmaku-choices", serde_json::to_string(chunk).unwrap()]}));
+    }
+    pipe_write(&session.pipe, json!({"command": ["script-message", "mjc-danmaku-end"]}));
+    Ok(true)
+}
+
 fn start_playback_inner(app: AppHandle, state: tauri::State<'_, PlayerState>, opts: StartOptions, trace: PlaybackTrace) -> Result<(), String> {
     // Only one playback at a time
     stop_internal(&app, &state);
@@ -1141,6 +1236,7 @@ fn start_playback_inner(app: AppHandle, state: tauri::State<'_, PlayerState>, op
         *st = PlayerStatus { active: true, position: opts.start_seconds.max(0.0), ..Default::default() };
     }
     *state.session.lock().unwrap() = Some(MpvSession {
+        diagnostic_id: opts.diagnostic_id.clone().unwrap_or_default(),
         pid,
         host_hwnd: host,
         pipe: pipe.clone(),
@@ -1250,6 +1346,15 @@ fn start_playback_inner(app: AppHandle, state: tauri::State<'_, PlayerState>, op
                                     }
                                 }
                                 "mjc-screenshot" => screenshot::request(&app2, pid, &screenshot_pipe, &command_pipe, &settings),
+                                "mjc-danmaku-action" => {
+                                    // Old reader threads cannot toggle the next playback's state.
+                                    let state = app2.state::<PlayerState>();
+                                    let guard = state.session.lock().unwrap();
+                                    if let Some(s) = guard.as_ref().filter(|s| s.pid == pid) {
+                                        let _ = app2.emit("mpv://danmaku-action", json!({"diagnosticId": s.diagnostic_id,
+                                            "action": v["args"][1], "id": v["args"][2]}));
+                                    }
+                                }
                                 "mjc-cursor-zones" => {
                                     if let Some(zones) = v["args"][1].as_str().and_then(|s| serde_json::from_str::<Vec<CursorZone>>(s).ok()) {
                                         *cursor_zones.lock().unwrap() = zones;
@@ -1505,6 +1610,10 @@ mod tests {
 
     #[test]
     fn keyboard_keys_and_video_ratio_follow_native_input() {
+        for key in ["SPACE", "ENTER", "LEFT", "RIGHT", "UP", "DOWN", "M", "F", "A", "S", "BS", "0", "9"] {
+            assert!(supported_player_keyboard_key(key));
+        }
+        for key in ["quit", "run", "ESC", "", "10", "DOWN\nquit"] { assert!(!supported_player_keyboard_key(key)); }
         assert_eq!(player_key(VK_LEFT).as_deref(), Some("LEFT"));
         assert_eq!(player_key(0x35).as_deref(), Some("5"));
         assert_eq!(player_key(0x65).as_deref(), Some("5"));
@@ -1827,7 +1936,7 @@ mod tests {
         requested_receive.recv_timeout(Duration::from_secs(5)).expect("mpv did not request the stalled video");
         assert!(loaded_receive.try_recv().is_err(), "fixture must still be loading");
         let start = Instant::now();
-        stop_session(MpvSession { pid, host_hwnd: 0, pipe: commands, window_before: None });
+        stop_session(MpvSession { diagnostic_id: String::new(), pid, host_hwnd: 0, pipe: commands, window_before: None });
         assert!(start.elapsed() < Duration::from_secs(2), "cancel waited for the HTTP server");
         let deadline = Instant::now() + Duration::from_secs(2);
         while pid_alive(pid) && Instant::now() < deadline {
@@ -1847,7 +1956,7 @@ mod tests {
     }
 
     #[test]
-    fn commands_remain_responsive_with_an_idle_event_reader() {
+    fn commands_remain_responsive_with_large_broadcasts_and_an_idle_event_reader() {
         let mpv = mpv_exe_path().expect("bundled mpv");
         let pipe_path = format!("\\\\.\\pipe\\mjc-pause-test-{}", std::process::id());
         let args = vec![
@@ -1889,6 +1998,11 @@ mod tests {
         for _ in 0..3 {
             commands.send(json!({"command": ["set_property", "pause", true]})).unwrap();
             assert!(receive.recv_timeout(timeout).expect("pause command blocked"));
+            // Large script messages are broadcast back to IPC clients. Real
+            // CJK danmaku chunks exceed a named pipe buffer, unlike short input.
+            for _ in 0..8 {
+                commands.send(json!({"command": ["script-message", "mjc-large-payload-test", "弹幕传输回归".repeat(3000)]})).unwrap();
+            }
             // While paused the event thread is waiting for new input. Mouse
             // traffic and resume must still get through the command connection.
             for x in 0..100 {
@@ -1898,7 +2012,16 @@ mod tests {
             assert!(!receive.recv_timeout(timeout).expect("resume command blocked"));
         }
         commands.send(json!({"command": ["script-message", "mjc-quit"]})).unwrap();
-        assert_eq!(message_receive.recv_timeout(timeout).expect("exit message was not delivered"), json!(["mjc-quit"]));
+        let mut broadcasts = 0;
+        loop {
+            let message = message_receive.recv_timeout(timeout).expect("exit message was not delivered");
+            if message[0] == "mjc-quit" { break; }
+            if message[0] == "mjc-large-payload-test" {
+                assert_eq!(message[1].as_str().unwrap().chars().count(), 18_000);
+                broadcasts += 1;
+            }
+        }
+        assert_eq!(broadcasts, 24, "the independent event connection must still receive complete broadcasts");
         commands.send(json!({"command": ["quit"]})).unwrap();
     }
 }

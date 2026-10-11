@@ -65,6 +65,7 @@ const settingsStore = Object.assign(selector => selector(useSettings.getState())
 const settingsModule = { exports: {} };
 const settingsCode = esbuild.transformSync(fs.readFileSync('src/pages/Settings.tsx', 'utf8'), { loader: 'tsx', format: 'cjs', jsx: 'automatic' }).code;
 const imports = {
+  '../player/danmakuSettings': require('./source-bundle.cjs')('src/player/danmakuSettings.ts'),
   '../api/mediaServer': require('./source-bundle.cjs')('src/api/mediaServer.ts'),
   react, 'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
   '../store/settings': { ...mod.exports, useSettings: settingsStore },

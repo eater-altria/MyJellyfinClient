@@ -13,6 +13,7 @@
 - ⚙️ 完整设置页：通用 / 列表 / 播放 / 界面 / 手势 / 视频 / 音频 / 字幕 等 10 个标签页，8 色主题切换
 - ⬆️ 手动检查更新：在「设置 → 通用 → 关于与更新」点击检查 GitHub 最新正式 Release，新版提供发布页入口，由用户下载并安装
 - 🔍 搜索、🕘 播放记录
+- 💬 弹幕：服务器插件、自定义弹弹play兼容 API 与本地 XML；原生和浏览器播放均可滚动显示
 
 ## Jellyfin / Emby 服务器
 
@@ -46,11 +47,38 @@
 
 播放器标题使用媒体元数据；原生控制栏和菜单采用半透明玻璃背景，包含实时背景模糊、边缘折射及轻微色散，配合白色图标及悬浮文字提示，默认静止 3 秒后隐藏。窗口在视频尺寸可用时按完整视频的显示比例自适应，保留视频内的黑边，不自动裁切。Alt+Tab 返回应用后可直接使用空格、回车。截图保存清晰视频画面；优先使用系统图片目录的 `MyJellyfinClient` 文件夹，不可写时使用应用本地数据目录；开发版使用开发数据目录下的 `screenshots`，保存成功会显示实际路径。
 
+控件隐藏后鼠标移动通过原生消息直接唤醒；mpv 子窗口迟到或重新接管输入时，宿主会恢复输入路由。WebView 持有焦点时仍可使用播放快捷键和方向键长按，失焦释放临时按键状态。菜单可通过再次点击触发按钮、顶部 ×、点击外部或 Esc 关闭，不会在同一次点击中重新打开或误触背景播放。
+
 mpv 二进制（解压后约 120MB，不提交 Git）放置在 `src-tauri/resources/mpv/`。开发与打包脚本在 EXE、COM 或 DLL 缺失或为空时，会自动从 [mpv-winbuild-cmake](https://github.com/shinchiro/mpv-winbuild-cmake/releases) 的最新 Release 下载普通 x86_64 构建，校验包大小和 SHA-256，再使用 Windows 自带的 `tar.exe` 解压并安装完整的同版本二进制。已有完整资源时直接使用，不联网或自动升级。仅安装 `mpv.exe`、`mpv.com` 和全部随附 DLL，保留仓库中的 `portable_config/scripts/mjc-osc.lua` 和 `portable_config/shaders/mjc-glass.glsl`。
 
 也可单独运行 `./scripts/ensure-mpv.ps1` 准备播放器。自动下载需要访问 GitHub，以及 Windows 自带的 `curl.exe` 和 `tar.exe`；下载或校验失败会停止后续启动/打包，并给出重试与手动准备提示。下载与解压临时文件位于 `.tmp/`，完成或失败后清理，不接触 `.local/` 开发数据。离线时可以手动下载 x86_64 包并将同一套二进制放入上述目录。
 
 如果本机已有可信的 MyJellyfinClient 安装版，也可从安装目录的 `mpv/` 复制同一套 `mpv.exe`、`mpv.com` 和全部 DLL 到上述开发目录，仅复制这些二进制，保留仓库中的控制脚本和 shader。开发与打包脚本会先检查运行资源；出现 `Required runtime files are missing or empty` 时按提示补齐文件。如果直接运行 Cargo 或 Tauri 时出现 `glob pattern resources/mpv/*.exe path not found`，同样表示缺少本地 mpv 文件。
+
+## 弹幕
+
+在「设置 → 弹幕」启用功能，可配置不透明度、字号、显示区域、单条显示时长和时间偏移。默认关闭；播放控制栏中的弹幕图标可随时开关，关闭图标带斜杠，状态会保存。
+
+- **服务器插件：** Jellyfin 安装并配置 [jellyfin-plugin-danmu](https://github.com/cxfksword/jellyfin-plugin-danmu)，先让插件匹配下载当前影片。客户端从已保存的服务器入口读取 `/api/danmu/{媒体ID}/raw`，保留反向代理前缀。Emby 需要提供相同接口的兼容插件；未安装或没有 XML 时，「更多 / 播放设置」显示原因并提供重新获取。
+- **自定义 API：** 填写 [danmu_api](https://github.com/huangxd-/danmu_api) 等弹弹play兼容服务地址，可包含服务自身的路径 TOKEN，末尾 `/api/v2` 可填可不填。客户端优先向 `/api/v2/match` 提交由媒体名称、年份、季集编号生成的识别名称和已有时长，不读取视频或发送真实文件路径。服务明确返回唯一匹配时自动读取 `/api/v2/comment/{episodeId}?format=xml`，无需手选。不支持匹配接口（404/405/501）、缺少季集编号或没有确定结果时，回退 `/api/v2/search/episodes?anime=片名` 供手选。可在「更多 / 播放设置 → 更换弹幕来源」重新搜索其他结果；原生菜单分两行显示集数标题和来源，保留当前项勾选。也兼容返回弹弹play JSON 的服务。服务必须允许客户端跨域 GET/POST，不会接收媒体服务器账号、令牌或鉴权头。
+- **本地 XML：** 在「更多 / 播放设置」导入 XML。文件仅用于当前播放，不上传、不保存到设置，也不自动跨影片复用。来源不匹配时可改选结果或导入正确的 XML；时间不同步时可设置正数延后、负数提前。
+
+调研依据：SenPlayer 的[官方介绍](https://www.senmuse.com/)和上述两个开源服务的接口文档公开了弹幕能力与兼容方式，未公开其内部渲染源码。本项目自行实现解析和渲染，不假定 SenPlayer 的内部技术栈。参考插件在服务端按媒体元数据匹配各采集源；例如 B 站通过 `x/v2/dm/web/seg.so` 分段读取 Protobuf，再统一导出 XML，其他平台各有采集器。平台抓取、登录 Cookie 和反爬兼容由插件或自定义服务负责，客户端读取其结果。
+
+插件使用 B 站 XML 结构（见[数据模型源码](https://github.com/cxfksword/jellyfin-plugin-danmu/blob/main/Jellyfin.Plugin.Danmu/Scrapers/Entity/ScraperDanmaku.cs)）：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<i>
+  <d p="12.5,1,25,16777215,0,0,synthetic,1,1">示例弹幕 &amp; XML 转义</d>
+</i>
+```
+
+`p` 依次为：视频时间（秒）、类型、原始字号、十进制 RGB 颜色、发送时间、弹幕池、发送者标识、弹幕 ID、权重。普通滚动为 1/2/3，底部为 4、顶部为 5、反向滚动为 6；本客户端支持这些类型，字号由用户设置统一控制，不执行高级/代码弹幕 7/8/9。弹弹play JSON 的 `p` 采用 `时间,类型,颜色,发送者`，与 XML 的颜色位置不同。
+
+浏览器采用 Canvas，原生 mpv 采用独立 ASS OSD，保留正常字幕轨道。两者按视频时间定位，暂停、缓冲、倍速和前后跳转保持同步；轨道满时跳过会碰撞的弹幕。弹幕不唤醒隐藏控件、不占用画面输入、不出现在保存的视频截图中。解析限制为 16 MB / 50000 条，拒绝无效 XML、实体声明和非播放类型，弹幕与搜索结果不持久化。
+
+验证：`npm run test:danmaku` 覆盖真实 React/Chromium 的解析、自动匹配请求/加载/取消、手动更换、重试、导入、Canvas 像素与时钟、设置和两种播放器桥接；Rust/Lua 另外验证原生 ASS 像素、DPI、双行来源菜单、重复点击/外部点击/关闭图标/Esc、开关、退出清理与截图隔离。
 
 ## 开发
 
@@ -122,5 +150,5 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 
 ## 说明
 
-- 「文件」「IPTV」「弹幕」为占位页，后续版本实现。
+- 「文件」「IPTV」仍有占位功能，后续版本实现。
 - 服务器账号凭据保存在 WebView localStorage 中。

@@ -28,6 +28,9 @@ import { PLAYER_EXIT_EVENT } from '../player/exitPlayback';
 import { mediaTitle, usePlaybackTitle } from '../player/playbackTitle';
 import LiquidGlass from '../components/LiquidGlass';
 import { useBrowseActivity } from '../hooks/useBrowseActivity';
+import { useDanmaku } from '../hooks/useDanmaku';
+import DanmakuCanvas from '../components/DanmakuCanvas';
+import { IconDanmaku, IconDanmakuOff } from '../components/icons';
 import '../player/liquid-glass.css';
 
 const DIRECT_PLAY_CONTAINERS = ['mp4', 'm4v', 'mkv', 'mov', 'webm'];
@@ -261,6 +264,8 @@ export default function PlayerPage() {
   const [subSearch, setSubSearch] = useState('');
   const [subSearches, setSubSearches] = useState<string[]>([]);
   const mediaKey = () => `${itemId}:${sourceRef.current?.Id ?? ''}:web`;
+  const danmaku = useDanmaku(serverId, item?.Id === itemId ? item : null, active && !error);
+  const danmakuFile = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!notice) return;
@@ -734,6 +739,9 @@ export default function PlayerPage() {
       >
         {subTracks.filter(t => t.url).map(t => <track key={t.id} kind="subtitles" src={t.url} label={t.title} srcLang={t.lang} />)}
       </video>
+      <DanmakuCanvas video={videoRef} comments={danmaku.comments} settings={settings} active={active && !loading && !error} />
+      <input ref={danmakuFile} type="file" accept=".xml,text/xml,application/xml" className="hidden" aria-label="导入 XML 弹幕"
+        onChange={e => { const file = e.target.files?.[0]; if (file) void danmaku.importXml(file); e.target.value = ''; }} />
 
       {controlsVisible && <LiquidGlass tone="dark" intensity="subtle" className="player-side-tools" onClick={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}>
         {settings.showScreenshotButton && <button onClick={captureScreenshot} className="player-control-button" aria-label="截图" data-tooltip="截图"><IconCamera size={20} /></button>}
@@ -789,6 +797,21 @@ export default function PlayerPage() {
           <div className="player-menu-scroll overflow-y-auto pr-1"
             style={{ maxHeight: 'max(46px, min(326px, calc(100vh - 254px)))' }}>
           <div className="mb-3 text-xs font-medium text-white/50">播放设置</div>
+          <div className="mb-3 border-b border-white/10 pb-3">
+            <div className="mb-2 text-xs text-white/70" role="status">{settings.danmakuEnabled ? danmaku.status || '弹幕已开启' : '弹幕已关闭'}</div>
+            {danmaku.choices.length > 0 && <label className="player-menu-field">弹幕来源
+              <select aria-label="弹幕来源与集数" value={danmaku.selection} onChange={e => danmaku.select(e.target.value)}>
+                <option value="">选择来源与集数</option>
+                {danmaku.choices.map((choice, i) => <option key={`${choice.id}:${i}`} value={choice.id}>{choice.label}</option>)}
+              </select>
+            </label>}
+            <div className="flex flex-wrap gap-2 text-xs">
+              <button className="rounded-lg bg-white/10 px-3 py-2" onClick={() => danmakuFile.current?.click()}>导入 XML 弹幕</button>
+              <button className="rounded-lg bg-white/10 px-3 py-2 disabled:opacity-40" disabled={danmaku.loading || !settings.danmakuEnabled} onClick={danmaku.retry}>重新获取弹幕</button>
+              {settings.danmakuSource === 'api' && <button className="rounded-lg bg-white/10 px-3 py-2 disabled:opacity-40"
+                disabled={danmaku.loading || !settings.danmakuEnabled} onClick={danmaku.search}>更换弹幕来源</button>}
+            </div>
+          </div>
           <label className="player-menu-field">倍速
             <select aria-label="倍速" value={playbackRate} onChange={e => {
               if (videoRef.current) videoRef.current.playbackRate = Number(e.target.value);
@@ -859,6 +882,10 @@ export default function PlayerPage() {
               {settings.showSwitchMediaButton && <button onClick={() => switchMedia('next')} className="player-control-button player-secondary-button" aria-label="下一项媒体" data-tooltip="下一项媒体"><IconNext size={20} /></button>}
             </div>
             <div className="player-context-actions flex shrink-0 items-center">
+              <button className="player-control-button" aria-pressed={settings.danmakuEnabled} aria-label={settings.danmakuEnabled ? '关闭弹幕' : '开启弹幕'}
+                data-tooltip={settings.danmakuEnabled ? '关闭弹幕' : '开启弹幕'} onClick={() => { settings.set('danmakuEnabled', !settings.danmakuEnabled); poke(); }}>
+                {settings.danmakuEnabled ? <IconDanmaku size={22} /> : <IconDanmakuOff size={22} />}
+              </button>
               <button className="player-control-button player-track-action" aria-label={`倍速 ${playbackRate}x`} data-tooltip={`倍速 ${playbackRate}x`} onClick={() => { showControlsMenu(!controlsMenu); poke(); }} aria-expanded={controlsMenu}><IconPlaybackSpeed size={23} /></button>
               {subTracks.length > 0 && <button className="player-control-button player-track-action" aria-label="字幕" data-tooltip="字幕" onClick={() => { showControlsMenu(!controlsMenu); poke(); }} aria-expanded={controlsMenu}><IconPlaybackSubtitle size={23} /></button>}
               {audioTracks.length > 1 && <button className="player-control-button player-track-action" aria-label="音轨" data-tooltip="音轨" onClick={() => { showControlsMenu(!controlsMenu); poke(); }} aria-expanded={controlsMenu}><IconPlaybackAudio size={23} /></button>}

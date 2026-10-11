@@ -58,6 +58,8 @@ function mount(protocol, pending) {
     dispatchEvent: event => { keys.get(event.type)?.(event); return !event.defaultPrevented; },
   };
   const modules = {
+    '../hooks/useDanmaku': { useDanmaku: () => ({ comments: [], choices: [], status: '', loading: false }) },
+    '../player/danmakuSettings': require('./source-bundle.cjs')('src/player/danmakuSettings.ts'),
     '../api/mediaServer': require('./source-bundle.cjs')('src/api/mediaServer.ts'),
     '../hooks/useBrowseActivity': { useBrowseActivity: () => true },
     react: { useEffect: fn => effects.push(fn), useRef: current => ({ current }),
@@ -76,7 +78,7 @@ function mount(protocol, pending) {
       return () => events.delete(name);
     } },
     '../store/servers': { useServers: { getState: () => ({ getApi: () => pending === 'noserver' ? null : api, servers: [] }) } },
-    '../store/settings': { useSettings: { getState: () => ({ resumeFromLastPosition: true, playerCacheSizeMB: 512 }) },
+    '../store/settings': { useSettings: Object.assign(() => ({}), { getState: () => ({ resumeFromLastPosition: true, playerCacheSizeMB: 512 }) }),
       getClientIdentity: () => ({name:'Fixture Client', version:'1.0', deviceName:'Fixture PC'}) },
     '../player/playbackPreferences': { getPlaybackPreferences: () => ({}), rememberTrack: () => {},
       saveSubtitleSearchQueries: () => {}, getAdjacentMedia: async () => undefined },
@@ -99,7 +101,7 @@ function mount(protocol, pending) {
     return modules[name];
   }, bundle, bundle.exports, fakeWindow);
   const view = bundle.exports.default();
-  const cleanup = effects[0]() ?? (() => {});
+  const cleanup = effects.find(effect => effect.toString().includes('createPlaybackDiagnostics'))() ?? (() => {});
   const title = {exports:{}};
   new Function('require', 'module', 'exports', 'window', titleCode)(name => modules[name], title, title.exports, fakeWindow);
   const header = title.exports.default({ dark: true });
@@ -114,6 +116,8 @@ function mount(protocol, pending) {
   assert(closeButton, 'Player title bar must provide a close control');
   return { calls, events, states, signals, delayed, item, cleanup, renderHeader: () => title.exports.default({ dark: true }),
     key: (key, repeat = false) => keys.get('keydown')({ key, repeat, preventDefault() {} }),
+    keyUp: key => keys.get('keyup')({ key, preventDefault() {} }),
+    blur: () => keys.get('blur')(),
     escape: () => keys.get('keydown')({ key: 'Escape', preventDefault() {} }),
     close: () => closeButton.props.onClick() };
 }
@@ -169,6 +173,19 @@ function mount(protocol, pending) {
     'Keyboard input after Alt+Tab must reach mpv even when the webview has focus and no mouse click occurred');
   await loaded.key(' ', true);
   assert.equal(loaded.calls.filter(call => call[0] === 'player_keyboard_action').length, 2, 'Held Space must not repeatedly toggle playback');
+  for (const key of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'm', 'f', 'a', 's', '2']) {
+    await loaded.key(key); loaded.keyUp(key);
+  }
+  const keyEvents = loaded.calls.filter(call => call[0] === 'player_keyboard_input');
+  assert.deepEqual(keyEvents.map(call => call[1].key), ['LEFT','LEFT','RIGHT','RIGHT','UP','UP','DOWN','DOWN','M','M','F','F','A','A','S','S','2','2']);
+  assert(keyEvents.every((call, index) => call[1].down === (index % 2 === 0) && call[1].diagnosticId === startOptions.diagnostic_id),
+    'All WebView playback keys must forward down/up under the active session');
+  await loaded.key('ArrowRight'); await loaded.key('ArrowRight', true);
+  const heldCount = loaded.calls.filter(call => call[0] === 'player_keyboard_input').length;
+  loaded.blur();
+  assert.equal(loaded.calls.filter(call => call[0] === 'player_keyboard_input').length, heldCount + 1);
+  assert.deepEqual(loaded.calls.at(-1)[1], { diagnosticId: startOptions.diagnostic_id, key: 'RIGHT', down: false },
+    'Blur must release held seek/rate keys rather than leaving them stuck');
   await loaded.escape();
   assert(loaded.calls.some(c => c[0] === 'player_escape'), 'Loaded Escape must go through the native modal stack even when the title bar has focus');
   assert(!loaded.calls.some(c => c[0] === 'navigate'), 'The frontend must not bypass an open native modal');

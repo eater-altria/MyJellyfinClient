@@ -7,6 +7,7 @@ import UpdateCheck from '../components/UpdateCheck';
 import { isTauri } from '../platform/window';
 import { availableServerConnectors, getServerConnector, serverProtocolName } from '../api/mediaServer';
 import type { ClientIdentity, ClientIdentityProtocol } from '../utils/clientIdentity';
+import { danmakuDisplayDuration } from '../player/danmakuSettings';
 import {
   IconSettings,
   IconList,
@@ -637,8 +638,51 @@ export default function Settings() {
         {tab === 'video' && <VideoTab />}
         {tab === 'audio' && <AudioTab />}
         {tab === 'subtitle' && <SubtitleTab />}
-        {tab === 'danmaku' && <InfoCard text="弹幕功能将在后续版本提供" />}
+        {tab === 'danmaku' && <DanmakuTab />}
       </div>
     </div>
   );
+}
+
+function DanmakuTab() {
+  const st = useSettings();
+  const [url, setUrl] = useState(st.danmakuApiUrl);
+  const [offset, setOffset] = useState(String(st.danmakuOffset));
+  const saveOffset = () => {
+    const n = Number(offset);
+    if (offset.trim() && Number.isFinite(n)) st.set('danmakuOffset', n);
+    setOffset(String(useSettings.getState().danmakuOffset));
+  };
+  return <>
+    <Section label="弹幕来源" footnote="服务器模式读取插件已匹配的 XML；自定义 API 优先按片名、年份和季集编号自动匹配，无法确定时手动选择，也可在播放设置中更换来源。播放器支持导入本地 XML，文件仅用于本次播放。">
+      <ToggleRow label="启用弹幕" field="danmakuEnabled" />
+      <SelectRow label="获取方式" field="danmakuSource" options={[
+        { label: '服务器弹幕插件', value: 'server' }, { label: '自定义弹幕 API', value: 'api' },
+      ]} />
+      {st.danmakuSource === 'api' && <Row label="弹幕 API 地址">
+        <div className="w-72 max-w-full">
+          <input aria-label="弹幕 API 地址" aria-describedby="danmaku-api-help" type="url" placeholder="https://你的服务地址/可选TOKEN" value={url}
+            className={`${selectCls} w-full`} onChange={e => setUrl(e.target.value)}
+            onBlur={() => st.set('danmakuApiUrl', url.trim())}
+            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }} />
+          <p id="danmaku-api-help" className="mt-2 text-[12px] leading-relaxed text-text-secondary">
+            仅支持弹弹play兼容 API，并非所有弹幕网站都可直接填写。
+          </p>
+        </div>
+      </Row>}
+    </Section>
+    <Section label="显示" footnote="播放页的弹幕按钮会保存开关状态。弹幕跟随视频时间，暂停与缓冲时停止，快进、快退或倍速播放保持同步。">
+      <SelectRow label="不透明度" field="danmakuOpacity" numeric options={[0.25, 0.5, 0.7, 0.85, 1].map(n => ({ label: `${Math.round(n * 100)}%`, value: String(n) }))} />
+      <SelectRow label="字号" field="danmakuFontSize" numeric options={[16, 20, 24, 28, 32, 40, 48].map(n => ({ label: `${n}`, value: String(n) }))} />
+      <SelectRow label="显示区域" field="danmakuArea" numeric options={[
+        { label: '四分之一屏', value: '0.25' }, { label: '半屏', value: '0.5' }, { label: '四分之三屏', value: '0.75' }, { label: '全屏', value: '1' },
+      ]} />
+      <SelectRow label="单条显示时长" field="danmakuDuration" numeric options={[4, 6, 8, 10, 12, 16, 20].map(n => ({ label: `${Number(danmakuDisplayDuration(n).toFixed(2))} 秒`, value: String(n) }))} />
+    </Section>
+    <Section label="时间同步" footnote="正数让弹幕延后，负数让弹幕提前。范围为 −600 至 600 秒，回车或失焦保存。">
+      <Row label="时间偏移（秒）"><input type="number" aria-label="弹幕时间偏移" min={-600} max={600} step={0.1}
+        className={`${selectCls} w-28`} value={offset} onChange={e => setOffset(e.target.value)} onBlur={saveOffset}
+        onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }} /></Row>
+    </Section>
+  </>;
 }

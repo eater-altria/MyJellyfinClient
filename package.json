@@ -1,6 +1,6 @@
 {
   "name": "my-jellyfin-client",
-  "version": "0.4.8",
+  "version": "0.5.0",
   "description": "A Jellyfin / Emby Windows client with a Liquid Glass inspired UI",
   "type": "module",
   "scripts": {
@@ -10,7 +10,8 @@
     "build:win": "npm run build && tauri build",
     "typecheck": "tsc -b --noEmit",
     "test:servers": "node scripts/test-connectors.cjs && node scripts/test-media-servers.cjs && node scripts/test-client-user-agent.cjs && node scripts/test-server-order.cjs",
-    "test:playback": "node scripts/test-playback-diagnostics.cjs && node scripts/test-playback-cancel.cjs && node scripts/test-browser-player.cjs",
+    "test:playback": "node scripts/test-playback-diagnostics.cjs && node scripts/test-playback-cancel.cjs && node scripts/test-browser-player.cjs && node scripts/test-danmaku.cjs",
+    "test:danmaku": "node scripts/test-danmaku.cjs",
     "test:home": "node scripts/test-home-libraries.cjs && node scripts/test-library-sort.cjs && node scripts/test-issue2-navigation.cjs",
     "test:settings": "node scripts/test-list-settings.cjs && node scripts/test-playback-preferences.cjs && node scripts/test-browser-settings.cjs && node scripts/test-app-updates.cjs",
     "test:ui": "node scripts/test-liquid-glass.cjs && node scripts/test-glass-buttons.cjs && node scripts/test-app-backdrop.cjs && node scripts/test-utility-pages.cjs && node scripts/test-search-layout.cjs && node scripts/test-series-navigation.cjs && node scripts/test-detail-logo.cjs"

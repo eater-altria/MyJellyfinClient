@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { DANMAKU_DEFAULTS, normalizeDanmakuSettings, type DanmakuSettings } from '../player/danmakuSettings';
 import { normalizeClientIdentities, normalizeClientIdentityText, resolveClientIdentity,
   type ClientIdentities, type ClientIdentity, type ClientIdentityProtocol } from '../utils/clientIdentity';
 export { CLIENT_IDENTITY_MAX_LENGTH, CLIENT_NAME_PRESETS, DEFAULT_CLIENT_IDENTITY } from '../utils/clientIdentity';
@@ -16,7 +17,7 @@ export function normalizePlayerCacheSizeMB(value: unknown): number {
     : PLAYER_CACHE_DEFAULT_MB;
 }
 
-export interface AppSettings {
+export interface AppSettings extends DanmakuSettings {
   // 通用
   accentColor: AccentColor;
   defaultModule: 'files' | 'servers' | 'iptv' | 'history' | 'search';
@@ -76,6 +77,7 @@ export interface AppSettings {
 }
 
 const DEFAULTS: AppSettings = {
+  ...DANMAKU_DEFAULTS,
   accentColor: '#0a84ff',
   defaultModule: 'files',
   clientIdentities: normalizeClientIdentities(null),
@@ -136,7 +138,8 @@ export const useSettings = create<SettingsState>()(
   persist<SettingsState, [], [], AppSettings>(
     (set) => ({
       ...DEFAULTS,
-      set: (key, value) => set({ [key]: key === 'playerCacheSizeMB' ? normalizePlayerCacheSizeMB(value)
+      set: (key, value) => set({ [key]: key in DANMAKU_DEFAULTS ? normalizeDanmakuSettings({ [key]: value })[key as keyof DanmakuSettings]
+        : key === 'playerCacheSizeMB' ? normalizePlayerCacheSizeMB(value)
         : key === 'clientIdentities' ? normalizeClientIdentities(value) : value } as Partial<SettingsState>),
       setClientIdentity: (protocol, field, value) => set(state => ({
         clientIdentities: { ...state.clientIdentities, [protocol]: {
@@ -164,6 +167,7 @@ export const useSettings = create<SettingsState>()(
         return {
           ...current,
           ...retained,
+          ...normalizeDanmakuSettings(saved),
           playerCacheSizeMB: normalizePlayerCacheSizeMB('playerCacheSizeMB' in saved ? saved.playerCacheSizeMB : current.playerCacheSizeMB),
           clientIdentities: normalizeClientIdentities(identities),
         };

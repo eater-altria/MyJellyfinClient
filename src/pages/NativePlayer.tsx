@@ -1,5 +1,5 @@
 import { getServerConnector } from '../api/mediaServer';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type Event as TauriEvent, type UnlistenFn } from '@tauri-apps/api/event';
@@ -12,6 +12,8 @@ import { PLAYER_EXIT_EVENT } from '../player/exitPlayback';
 import { mediaTitle, usePlaybackTitle } from '../player/playbackTitle';
 import LiquidGlass from '../components/LiquidGlass';
 import { useBrowseActivity } from '../hooks/useBrowseActivity';
+import { useDanmaku } from '../hooks/useDanmaku';
+import { danmakuDisplaySettings } from '../player/danmakuSettings';
 import '../player/liquid-glass.css';
 
 interface PositionPayload {
@@ -19,6 +21,11 @@ interface PositionPayload {
   duration: number;
   paused: boolean;
   active: boolean;
+}
+
+function nativePlaybackKey(key: string): string | undefined {
+  const named: Record<string, string> = { ArrowLeft: 'LEFT', ArrowRight: 'RIGHT', ArrowUp: 'UP', ArrowDown: 'DOWN', Backspace: 'BS' };
+  return named[key] ?? (/^[mfas0-9]$/i.test(key) ? key.toUpperCase() : undefined);
 }
 
 function mapAudioLang(pref: string): string | null {
@@ -60,6 +67,19 @@ export default function NativePlayer() {
   const [starting, setStarting] = useState(true);
   const [diagnosticPath, setDiagnosticPath] = useState<string | null>(null);
   const [diagnosticId, setDiagnosticId] = useState('');
+  const [danmakuItem, setDanmakuItem] = useState<BaseItem | null>(null);
+  const [danmakuSession, setDanmakuSession] = useState('');
+  const settings = useSettings();
+  const danmaku = useDanmaku(serverId, danmakuItem?.Id === itemId ? danmakuItem : null, active && !error);
+  const danmakuRef = useRef(danmaku);
+  danmakuRef.current = danmaku;
+  const danmakuFile = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!active || !danmakuSession) return;
+    void invoke('player_danmaku', { diagnosticId: danmakuSession, comments: danmaku.comments,
+      settings: { ...danmakuDisplaySettings(settings), danmakuSource: settings.danmakuSource, danmakuSelection: danmaku.selection }, choices: danmaku.choices, status: danmaku.status }).catch(() => {});
+  }, [active, danmakuSession, danmaku.comments, danmaku.choices, danmaku.status, danmaku.selection, settings.danmakuEnabled,
+    settings.danmakuSource, settings.danmakuOpacity, settings.danmakuFontSize, settings.danmakuArea, settings.danmakuDuration, settings.danmakuOffset]);
 
   useEffect(() => {
     if (!active || !serverId || !itemId) return;
@@ -77,6 +97,7 @@ export default function NativePlayer() {
     let latestPos: PositionPayload = { position: 0, duration: 0, paused: false, active: false };
     const unlistens: UnlistenFn[] = [];
     setStarting(true);
+    setDanmakuItem(null); setDanmakuSession('');
     setError(null);
     usePlaybackTitle.getState().setTitle('');
 
@@ -194,6 +215,15 @@ export default function NativePlayer() {
             if (!cancelled && !done) await invoke('player_message', { message: '无法获取相邻媒体，请稍后重试' }).catch(() => {});
           } finally { switching = false; }
         })) return;
+        if (!await subscribe<{ diagnosticId: string; action: string; id?: string }>('mpv://danmaku-action', e => {
+          if (e.payload.diagnosticId !== trace.id) return;
+          if (e.payload.action === 'toggle') {
+            const settings = useSettings.getState(); settings.set('danmakuEnabled', !settings.danmakuEnabled);
+          } else if (e.payload.action === 'import') danmakuFile.current?.click();
+          else if (e.payload.action === 'retry') danmakuRef.current.retry();
+          else if (e.payload.action === 'search') danmakuRef.current.search();
+          else if (e.payload.action === 'select' && typeof e.payload.id === 'string') danmakuRef.current.select(e.payload.id);
+        })) return;
         if (!await subscribe<string>('mpv://error', (e) => {
           const details = playbackErrorDetails(e.payload, secrets);
           trace.record('playback.mpv-error', details);
@@ -207,11 +237,13 @@ export default function NativePlayer() {
         const it = await api.getItem(itemId, controller.signal);
         if (cancelled || done) return;
         item = it;
+        setDanmakuItem(it);
         trace.record('metadata.response', { type: it.Type, sourceCount: it.MediaSources?.length ?? 0 });
         const title = mediaTitle(it);
         usePlaybackTitle.getState().setTitle(title);
 
         const st = useSettings.getState();
+        const { danmakuApiUrl: _danmakuApiUrl, ...playerSettings } = st;
         const posParam = searchParams.get('pos');
         let startTicks = posParam ? parseInt(posParam, 10) : NaN;
         if (Number.isNaN(startTicks)) {
@@ -271,7 +303,7 @@ export default function NativePlayer() {
             http_headers: source?.RequiredHttpHeaders,
             alang: mapAudioLang(st.preferredAudioLanguage),
             slang: mapSubLang(st.preferredSubtitleLanguage),
-            settings: { ...st, ...getPlaybackPreferences(serverId, mediaKey, st) },
+            settings: { ...playerSettings, ...getPlaybackPreferences(serverId, mediaKey, st) },
             media_info: {
               title, filename: (source?.Path ?? it.Path)?.split(/[\\/]/).pop()?.split('?')[0],
               container: source?.Container, size: source?.Size, bitrate: source?.Bitrate,
@@ -279,7 +311,7 @@ export default function NativePlayer() {
             },
           },
         });
-        if (!cancelled && !done) trace.record('playback.start.accepted');
+        if (!cancelled && !done) { trace.record('playback.start.accepted'); setDanmakuSession(trace.id); }
         // mpv://ready ends the loading screen when the media is actually loaded.
       } catch (e) {
         if (!cancelled && !done) {
@@ -292,15 +324,28 @@ export default function NativePlayer() {
     })();
 
     // The webview can regain keyboard focus after Alt+Tab or a title-bar action.
+    const heldKeys = new Set<string>();
+    const releaseKeys = () => {
+      for (const key of heldKeys) void invoke('player_keyboard_input', { diagnosticId: trace.id, key, down: false }).catch(() => {});
+      heldKeys.clear();
+    };
     const onKey = async (e: KeyboardEvent) => {
-      if (cancelled || done || e.repeat) return;
+      if (cancelled || done || e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
+      if (typeof HTMLElement !== 'undefined' && e.target instanceof HTMLElement
+        && e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
       if (e.key === ' ' || e.key === 'Enter') {
         if (!loaded) return;
         e.preventDefault();
         await invoke('player_keyboard_action', { key: e.key === ' ' ? 'SPACE' : 'ENTER' }).catch(() => {});
         return;
       }
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape') {
+        const key = nativePlaybackKey(e.key);
+        if (!key || !loaded || heldKeys.has(key)) return;
+        e.preventDefault(); heldKeys.add(key);
+        await invoke('player_keyboard_input', { diagnosticId: trace.id, key, down: true }).catch(() => {});
+        return;
+      }
       e.preventDefault();
       // The webview can keep focus after a title-bar interaction. Loaded
       // playback still delegates Escape to the OSC's modal/menu stack.
@@ -308,7 +353,15 @@ export default function NativePlayer() {
       try { if (!await invoke<boolean>('player_escape')) finishAndBack(); }
       catch { finishAndBack(); }
     };
+    const onKeyUp = (e: KeyboardEvent) => {
+      const key = nativePlaybackKey(e.key);
+      if (!key || !heldKeys.delete(key)) return;
+      e.preventDefault();
+      void invoke('player_keyboard_input', { diagnosticId: trace.id, key, down: false }).catch(() => {});
+    };
     window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', releaseKeys);
     const onClose = (event: Event) => { event.preventDefault(); finishAndBack(); };
     window.addEventListener(PLAYER_EXIT_EVENT, onClose);
 
@@ -335,6 +388,9 @@ export default function NativePlayer() {
       usePlaybackTitle.getState().setTitle('');
       window.clearInterval(interval);
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', releaseKeys);
+      releaseKeys();
       window.removeEventListener(PLAYER_EXIT_EVENT, onClose);
       unlistens.forEach((u) => u());
       reportStopped();
@@ -345,6 +401,8 @@ export default function NativePlayer() {
 
   return (
     <div className="player-surface player-native-stage relative flex h-full w-full flex-col items-center justify-center bg-black px-6 text-white/50">
+      <input ref={danmakuFile} type="file" accept=".xml,text/xml,application/xml" className="hidden" aria-label="导入 XML 弹幕"
+        onChange={e => { const file = e.target.files?.[0]; if (file) void danmaku.importXml(file); e.target.value = ''; }} />
       {error ? (
         <LiquidGlass tone="dark" className="player-status-card player-error-card !justify-start max-h-full overflow-y-auto" role="alert">
           <div className="text-[18px] font-medium text-white">播放失败</div>

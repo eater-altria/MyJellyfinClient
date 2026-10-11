@@ -14,6 +14,7 @@ local mouse = { x = 0, y = 0 }
 local dimensions = { w = 1280, h = 760 }
 local tracks, properties, timers, events = {}, {}, {}, {}
 local clock = 1
+local danmaku_time
 local shader_opts, shader_updates = {['other/amount'] = '0.7'}, 0
 local target_params = {gamma = 'srgb'}
 mp.set_property_native = function(name, value)
@@ -35,13 +36,16 @@ mp.get_property_native = function(name)
     if name == 'track-list' then return tracks end
 end
 mp.get_property = function(name) return properties[name] end
-mp.get_property_number = function() return nil end
+mp.get_property_number = function(name) if name == 'time-pos' then return danmaku_time end end
 mp.get_osd_size = function() return dimensions.w, dimensions.h end
 mp.get_time = function() return clock end
 mp.observe_property = function(name, _, callback) observers[name] = callback end
 mp.add_forced_key_binding = function(key, _, callback) bindings[key] = callback end
 mp.add_periodic_timer = function(interval, callback) timers[interval] = callback end
-mp.register_event = function(name, callback) events[name] = callback end
+mp.register_event = function(name, callback)
+    local previous = events[name]
+    events[name] = previous and function(...) previous(...); callback(...) end or callback
+end
 mp.commandv = function(...)
     local command = {...}
     if command[1] == 'screenshot-to-file' then
@@ -261,7 +265,9 @@ local ok, err = pcall(function()
     last('cycle', 'pause')
     count = #commands
     messages['mjc-double-click'](tostring(center('fs')), tostring(select(2, center('fs'))))
-    assert(#commands == count, 'Double click on controls must not pause')
+    assert(#commands == count + 1 and not has_command(count + 1, 'cycle', 'pause'),
+        'The second press on fullscreen must activate that button without background playback')
+    last('script-message', 'mjc-fullscreen')
     messages['mjc-media-details']('{"title":"测试影片","filename":"movie.mkv","container":"mkv","size":1073741824}')
     observers['media-title']('media-title', 'stream?Static=true&PlaySessionId=fixture')
     events['file-loaded']()
@@ -337,7 +343,69 @@ local ok, err = pcall(function()
     for _, z in ipairs(controller.zones) do assert(z.name ~= 'prev' and z.name ~= 'next', 'Switch buttons disabled') end
     click_control('more')
     assert(not overlays[2].data:find('截图', 1, true), 'Screenshot hidden in more menu as well')
+    clock = clock + 1; click_control('more')
+    assert(controller.menu == nil and overlays[2].data == '', 'Clicking More again must close it instead of reopening in the same click')
+    clock = clock + 1; click_control('more')
+    messages['mjc-settings']('{"mouseLeftClick":"playpause"}')
+    local before_dismiss = #commands
+    click(10, 350)
+    clock = clock + 1; timers[0.25]()
+    assert(controller.menu == nil and not controller.pending_click and not has_command(before_dismiss + 1, 'cycle', 'pause'),
+        'An outside click must dismiss the menu without scheduling configured background playback')
+    messages['mjc-settings']('{"mouseLeftClick":"none"}')
+    clock = clock + 1; click_control('more')
+    local close_zone
+    for _, z in ipairs(controller.menu_zones) do if z.name == 'menu-close' then close_zone = z end end
+    assert(close_zone and cursor_at((close_zone.x0+close_zone.x1)/2,(close_zone.y0+close_zone.y1)/2) == 'pointer', 'Menu must provide a visible clickable close button')
+    click((close_zone.x0+close_zone.x1)/2,(close_zone.y0+close_zone.y1)/2)
+    assert(controller.menu == nil and overlays[2].data == '', 'Close icon must dismiss the menu')
+    clock = clock + 1; click_control('more')
     messages['mjc-escape']()
+    -- Match Windows DOWN/UP/DBLCLK/UP sequences, with stale mpv coordinates.
+    local function native_click(event, x, y)
+        messages['mjc-pointer'](event, tostring(x), tostring(y))
+        messages['mjc-pointer']('up', tostring(x), tostring(y))
+    end
+    local function native_control(event, name) native_click(event, center(name)) end
+    mouse.x, mouse.y = 0, 0
+    for _, event in ipairs({'down', 'double', 'down', 'double'}) do
+        count = #commands
+        native_control(event, 'playpause')
+        assert(#commands == count + 1, 'Every physical press on play must act immediately and exactly once')
+        last('cycle', 'pause')
+    end
+    count = #commands
+    native_control('down', 'more')
+    assert(controller.menu == 'more', 'First press must open the menu')
+    native_control('double', 'more')
+    assert(controller.menu == nil, 'Rapid second press must close the menu')
+    native_control('down', 'more')
+    for _, z in ipairs(controller.menu_zones) do if z.name == 'menu-close' then close_zone = z end end
+    native_click('double', (close_zone.x0 + close_zone.x1) / 2, (close_zone.y0 + close_zone.y1) / 2)
+    assert(controller.menu == nil and not has_command(count + 1, 'cycle', 'pause'),
+        'A double-click press on menu close must close it without a background action')
+    px, py = volume_point(0.3)
+    native_click('down', px, py)
+    messages['mjc-pointer']('double', tostring(px), tostring(py))
+    assert(controller.volume_drag, 'The second press on a slider must begin a captured drag')
+    messages['mjc-pointer']('move', tostring(controller.volume_slider.x1 + 100), '-100')
+    messages['mjc-pointer']('up', tostring(controller.volume_slider.x1 + 100), '-100')
+    assert(controller.volume == 200 and not controller.volume_drag and not controller.native_pointer,
+        'A double-click drag must use native coordinates and finish on release')
+    observers.volume('volume', 100)
+    clock = clock + 1
+    count = #commands
+    native_click('down', 600, 350); native_click('double', 600, 350)
+    assert(#commands == count + 1, 'A background double click must remain exactly one playback action')
+    last('cycle', 'pause')
+    px, py = center('playpause')
+    clock = clock + 6; timers[0.25]()
+    assert(not controller.visible, 'Hidden-control click fixture must start hidden')
+    count = #commands
+    native_click('down', px, py)
+    assert(controller.visible and #commands == count + 1,
+        'A first native click on a hidden control must wake and activate it without a preceding move')
+    last('cycle', 'pause')
     messages['mjc-settings']('{"autoHideControlsSeconds":3}')
     clock = 100; observers['mouse-pos']('mouse-pos', mouse)
     clock = 102.99; timers[0.25]()
@@ -348,6 +416,10 @@ local ok, err = pcall(function()
     cache('demuxer-cache-state', {['seekable-ranges'] = {{start = 120, ['end'] = 600}}})
     assert(not controller.visible and #controller.zones == 0, 'Background caching must not wake hidden controls')
     assert(cursor_at(500, 722) == 'default', 'Auto-hidden controls must clear their interactive cursor regions')
+    clock = 104
+    messages['mjc-pointer']('move', '500', '400')
+    assert(controller.visible and #controller.zones > 0, 'Direct native motion must wake the OSC without a mouse-pos observer notification')
+    controller.native_pointer = nil
     messages['mjc-settings']('{"autoHideControlsSeconds":5}')
     clock = 200; observers['mouse-pos']('mouse-pos', mouse)
     clock = 204.9; timers[0.25]()
@@ -471,7 +543,11 @@ local ok, err = pcall(function()
     click_control('sub')
     assert(overlays[2].data:find('最近: eng', 1, true), 'Stored subtitle history must be shown')
     click_label(2, '搜索当前字幕列表')
-    assert(cursor_zones[1].cursor == 'text', 'Subtitle search field must advertise text input')
+    local search_cursor
+    for _, z in ipairs(controller.menu_zones) do
+        if z.name == 'sub-search' then search_cursor = cursor_at((z.x0 + z.x1) / 2, (z.y0 + z.y1) / 2) end
+    end
+    assert(search_cursor == 'text', 'Subtitle search field must advertise text input')
     messages['mjc-text-input']('English')
     assert(overlays[2].data:find('English subtitle', 1, true) and not overlays[2].data:find('简体中文', 1, true), 'Search must filter current subtitle tracks')
     messages['mjc-key-down']('ENTER')
@@ -575,9 +651,88 @@ local ok, err = pcall(function()
     assert(commands[#commands][3] == 'fixture-failure' and commands[#commands][4] == 'error')
     assert(shader_opts == before_capture, 'A failed capture must also restore the glass backing')
     capture_fails = false
+    -- Danmaku uses real media time and its own overlay below controls/submenus.
+    dimensions = {w = 800, h = 450}
+    observers['osd-dimensions']('osd-dimensions', dimensions)
+    messages['mjc-ui-scale']('1')
+    local danmaku_settings = '{"danmakuEnabled":true,"danmakuOpacity":0.85,"danmakuFontSize":24,"danmakuArea":0.5,"danmakuDuration":8,"danmakuOffset":0}'
+    local danmaku_items = utils.format_json({
+        {time=1,mode=1,color=16711680,text='滚动 {\\p1} 测试'},
+        {time=1,mode=5,color=16777215,text='顶部'},
+        {time=1,mode=4,color=255,text='底部'},
+        {time=1,mode=6,color=65280,text='反向'},
+    })
+    danmaku_time = 3
+    messages['mjc-danmaku-begin'](danmaku_settings, '已加载 4 条弹幕')
+    messages['mjc-danmaku-chunk'](danmaku_items)
+    messages['mjc-danmaku-choices']('[{"id":"91","label":"测试剧集 · 第1集"}]')
+    messages['mjc-danmaku-end']()
+    assert(overlays[5].data:find('滚动 ｛＼p1｝ 测试',1,true), 'ASS control characters must be escaped')
+    assert(overlays[5].data:find('\\1c&H0000FF&',1,true), 'XML RGB red must convert to ASS BGR')
+    assert(overlays[5].z < overlays[1].z, 'Danmaku must stay under the controls')
+    local first = overlays[5].data
+    timers[1/30]()
+    assert(overlays[5].data == first, 'A paused/stalled media clock must freeze danmaku')
+    danmaku_time = 4; timers[1/30]()
+    assert(overlays[5].data ~= first, 'Time changes and playback speed must move danmaku')
+    local function danmaku_x(label)
+        for event in overlays[5].data:gmatch('[^\n]+') do
+            if event:find(label, 1, true) then return tonumber(event:match('\\pos%(([%-%d%.]+),')) end
+        end
+        error('Missing rendered danmaku: ' .. label)
+    end
+    danmaku_time = 1; timers[1/30]()
+    local reverse_start = danmaku_x('反向')
+    danmaku_time = 9; timers[1/30]()
+    assert(math.abs(danmaku_x('反向') - (reverse_start + (800 - reverse_start) * 0.7)) < 0.05,
+        'After the former 8-second lifetime, reverse danmaku must have travelled exactly 70% of its path')
+    assert(overlays[5].data:find('滚动', 1, true), 'Rolling comments must remain visible after the old lifetime')
+    danmaku_time = 12.5; timers[1/30]()
+    assert(overlays[5].data == '', 'All native comments expire after the extended lifetime')
+    controller.visible = false; render_all()
+    local activity = controller.last_active
+    danmaku_time = 3; timers[1/30]()
+    assert(overlays[5].data == first and not controller.visible and controller.last_active == activity,
+        'Seeking backward restores the same positions without waking controls')
+    danmaku_time = 100; timers[1/30]()
+    assert(overlays[5].data == '', 'Forward seeking must clear all expired comments')
+    danmaku_time = 3; messages['mjc-ui-scale']('1.5'); timers[1/30]()
+    assert(overlays[5].data:find('\\fs36.00',1,true), 'Danmaku font follows logical DPI rather than window size')
+    messages['mjc-ui-scale']('1'); controller.visible = true; render_all()
+    local enabled_icon = overlays[1].data
+    click_control('danmaku')
+    last('script-message', 'mjc-danmaku-action')
+    assert(commands[#commands][3] == 'toggle' and overlays[5].data == '' and not controller.settings.danmakuEnabled,
+        'Native toggle must clear the overlay and notify the persistent frontend setting')
+    assert(overlays[1].data ~= enabled_icon, 'Disabled danmaku has a distinct slash icon')
+    clock = clock + 1; click_control('danmaku'); timers[1/30]()
+    assert(overlays[5].data ~= '', 'Re-enabling immediately restores current-time comments')
+    messages['mjc-settings']('{"danmakuSource":"api","danmakuSelection":"91"}')
+    messages['mjc-danmaku-choices']('[{"id":"92","label":"第2话 · 长来源标题","title":"很长的来源名称 第一季(2011) from fixture","episode":"第2话 剧集标题"}]')
+    for _, size in ipairs({{w=1280,h=720,scale=1},{w=480,h=320,scale=1},{w=720,h=480,scale=1.5}}) do
+        dimensions = {w=size.w,h=size.h}; messages['mjc-ui-scale'](tostring(size.scale))
+        observers['osd-dimensions']('osd-dimensions',dimensions)
+        controller.menu = 'danmaku-source';controller.menu_offset=0;render_all()
+        assert(overlays[2].data:find('第2话',1,true) and overlays[2].data:find('第一季',1,true),
+            'Episode and source must render on separate readable lines')
+        for _, z in ipairs(controller.menu_zones) do
+            assert(z.x0>=0 and z.y0>=0 and z.x1<=size.w and z.y1<=size.h,'Two-line choices and close button must fit small/high-DPI windows')
+        end
+        clock=clock+1;click_control('more')
+        assert(controller.menu==nil and overlays[2].data=='','More must also close the source submenu')
+        controller.menu='danmaku-source';render_all();messages['mjc-key-down']('ESC')
+        assert(controller.menu==nil and overlays[2].data=='','Escape must close source selection without exiting playback')
+    end
+    dimensions={w=800,h=600};messages['mjc-ui-scale']('1');observers['osd-dimensions']('osd-dimensions',dimensions)
+    clock=clock+1;click_control('more');click_label(2,'更换弹幕来源')
+    last('script-message','mjc-danmaku-action')
+    assert(commands[#commands][3]=='search' and controller.menu=='danmaku-source','Changing source must request alternatives and show source selection')
+    messages['mjc-escape']()
+    events['end-file']()
+    assert(overlays[5].data == '', 'Ending media clears the independent overlay')
 end)
 if ok then
-    mp.msg.info('PASS: OSC drawing, glass geometry/hiding/DPI, capture restoration, exit, seeking, native controls, gestures, held-key speed restoration, paused navigation/fullscreen, hidden Space playback, audio boost, track memory, subtitle filtering/history and title toast')
+    mp.msg.info('PASS: OSC controls/glass/capture/lifecycle, menu close/reopen protection, direct pointer wake and native danmaku time/color/DPI/toggle/cleanup')
 else
     mp.msg.error(err)
 end

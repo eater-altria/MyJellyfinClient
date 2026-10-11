@@ -30,6 +30,7 @@ export interface MediaServerApi {
   search(term: string, limit?: number, signal?: AbortSignal): Promise<ItemsResult>;
   getPlayedItems(limit?: number, signal?: AbortSignal): Promise<ItemsResult>;
   getPlaybackInfo(itemId: string, player?: 'native' | 'web', signal?: AbortSignal): Promise<PlaybackInfoResult>;
+  getDanmakuXml?(itemId: string, signal?: AbortSignal): Promise<string | null>;
   resolveMediaUrl(input: string, authenticate?: boolean, allowExternalAuth?: boolean): string;
   directStreamUrl(itemId: string, mediaSourceId?: string, playSessionId?: string, source?: MediaSource): string;
   hlsUrl(itemId: string, mediaSourceId?: string, playSessionId?: string, source?: MediaSource): string;

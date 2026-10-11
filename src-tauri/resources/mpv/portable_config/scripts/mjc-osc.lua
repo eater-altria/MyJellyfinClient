@@ -31,6 +31,8 @@ local state = {
         doubleClickMilliseconds = 500,
         subtitleSearchHistory = true, rememberAudioTrack = true,
         rememberSubtitle = true, audioBoost = true,
+        danmakuEnabled = false, danmakuOpacity = 0.85, danmakuFontSize = 24,
+        danmakuArea = 0.5, danmakuDuration = 8, danmakuOffset = 0,
     },
     held_key = nil,
     volume_key = nil,
@@ -430,6 +432,12 @@ local function draw_context_icon(a, id, cx, cy, scale, color)
     elseif id == 'speed' then
         draw_line(a, cx, cy + 2 * scale, cx + 4 * scale, cy - 4 * scale, 1.6 * scale, color)
         draw_round_rect(a, cx - scale, cy + scale, cx + scale, cy + 3 * scale, scale, color)
+    elseif id == 'danmaku' then
+        draw_line(a, cx - 5 * scale, cy - 3 * scale, cx + 5 * scale, cy - 3 * scale, 1.3 * scale, color)
+        draw_line(a, cx - 5 * scale, cy + 2 * scale, cx + 2 * scale, cy + 2 * scale, 1.3 * scale, color)
+        if not state.settings.danmakuEnabled then
+            draw_line(a, cx - 8 * scale, cy - 8 * scale, cx + 8 * scale, cy + 8 * scale, 1.6 * scale, color)
+        end
     elseif id == 'vol' then draw_vol_icon(a, cx, cy, 8 * scale, color, state.mute)
     elseif id == 'more' then draw_menu_icon(a, cx, cy, 11 * scale, color)
     end
@@ -455,6 +463,132 @@ local top_ov = mp.create_osd_overlay('ass-events')
 top_ov.z = 900
 local info_ov = mp.create_osd_overlay('ass-events')
 info_ov.z = 1000
+
+-- Danmaku is an independent ASS overlay, never a subtitle track. It stays
+-- visible with the OSC hidden and does not alter activity or capture output.
+local danmaku_ov = mp.create_osd_overlay('ass-events')
+danmaku_ov.z = 100
+danmaku_ov.data = ''
+local danmaku = {items = {}, layout = {}, choices = {}, status = '', dirty = true}
+local function danmaku_duration()
+    -- Match danmakuDisplayDuration: retain saved choices, reduce speed by 30%.
+    return clamp(tonumber(state.settings.danmakuDuration) or 8, 4, 20) / 0.7
+end
+local function rebuild_danmaku(w, h)
+    local scale = state.ui_scale
+    local fs = clamp(tonumber(state.settings.danmakuFontSize) or 24, 12, 48) * scale
+    local duration = danmaku_duration()
+    local total = math.max(1, math.floor(math.max(0, h - 100 * scale) / (fs * 1.4)))
+    local rows = math.max(1, math.floor(total * clamp(tonumber(state.settings.danmakuArea) or 0.5, 0.25, 1)))
+    local lanes, layout = {}, {}
+    for _, c in ipairs(danmaku.items) do
+        local width = text_width(c.text, fs) + 8 * scale
+        local row
+        for i = 1, rows do
+            local slot = c.mode == 4 and total + 1 - i or i
+            local previous, free = lanes[slot], false
+            if not previous then free = true
+            else
+                local delta = c.time - previous.time
+                if c.mode ~= previous.mode or c.mode == 4 or c.mode == 5 then free = delta >= duration
+                else
+                    local old_speed, new_speed = (w + previous.width) / duration, (w + width) / duration
+                    free = old_speed * delta >= previous.width + 12 * scale
+                        and (new_speed <= old_speed or new_speed * math.max(0, duration - delta) <= w - 12 * scale)
+                end
+            end
+            if free then row = slot - 1; break end
+        end
+        if row then
+            local placed = {time = c.time, mode = c.mode, text = c.text, color = c.color, row = row, width = width}
+            lanes[row + 1] = placed; layout[#layout + 1] = placed
+        end
+    end
+    danmaku.layout, danmaku.fs, danmaku.w, danmaku.h = layout, fs, w, h
+    danmaku.dirty, danmaku.last_time = false, nil
+end
+local function render_danmaku()
+    local w, h = mp.get_osd_size()
+    if not w or not h or w <= 0 or h <= 0 then return end
+    if danmaku.dirty or w ~= danmaku.w or h ~= danmaku.h or state.ui_scale ~= danmaku.scale then
+        danmaku.scale = state.ui_scale; rebuild_danmaku(w, h)
+    end
+    local time = mp.get_property_number('time-pos')
+    if not state.settings.danmakuEnabled or not time or #danmaku.layout == 0 then
+        if danmaku_ov.data ~= '' then danmaku_ov.data = ''; danmaku_ov:update() end
+        danmaku.last_time = nil; return
+    end
+    time = time - clamp(tonumber(state.settings.danmakuOffset) or 0, -600, 600)
+    if time == danmaku.last_time then return end
+    danmaku.last_time = time
+    local duration = danmaku_duration()
+    local alpha = math.floor((1 - clamp(tonumber(state.settings.danmakuOpacity) or 0.85, 0.1, 1)) * 255 + 0.5)
+    local lo, hi = 1, #danmaku.layout + 1
+    while lo < hi do
+        local mid = math.floor((lo + hi) / 2)
+        if danmaku.layout[mid].time <= time - duration then lo = mid + 1 else hi = mid end
+    end
+    local a = new_ass()
+    for i = lo, #danmaku.layout do
+        local c = danmaku.layout[i]
+        if c.time > time then break end
+        local progress = (time - c.time) / duration
+        local x = (w - c.width) / 2
+        if c.mode == 1 then x = w - (w + c.width) * progress
+        elseif c.mode == 6 then x = -c.width + (w + c.width) * progress end
+        local color = math.floor(c.color)
+        local bgr = string.format('%02X%02X%02X', math.floor(color / 65536) % 256, math.floor(color / 256) % 256, color % 256)
+        -- ASS colors are BGR, whereas XML carries decimal RGB.
+        bgr = bgr:sub(5, 6) .. bgr:sub(3, 4) .. bgr:sub(1, 2)
+        a:new_event(); a:pos(x, 12 * state.ui_scale + c.row * danmaku.fs * 1.4)
+        a:append(string.format('{\\an7\\fn%s\\fs%.2f\\b1\\bord%.2f\\shad0\\1c&H%s&\\3c&H000000&\\alpha&H%02X&\\q2}',
+            FONT, danmaku.fs, 1.5 * state.ui_scale, bgr, alpha))
+        a:append(c.text:gsub('\\', '＼'):gsub('{', '｛'):gsub('}', '｝'):gsub('[\r\n]', ' '))
+    end
+    danmaku_ov.res_x, danmaku_ov.res_y, danmaku_ov.data = w, h, a.text
+    danmaku_ov:update()
+end
+mp.add_periodic_timer(1 / 30, render_danmaku)
+mp.register_script_message('mjc-danmaku-begin', function(json, status)
+    local settings = utils.parse_json(json)
+    if type(settings) ~= 'table' then return end
+    for key, value in pairs(settings) do
+        if key:sub(1, 7) == 'danmaku' then state.settings[key] = value end
+    end
+    danmaku.items, danmaku.layout, danmaku.choices = {}, {}, {}
+    danmaku.status = type(status) == 'string' and status or ''
+    danmaku.dirty = true; danmaku_ov.data = ''; danmaku_ov:update()
+end)
+mp.register_script_message('mjc-danmaku-chunk', function(json)
+    local items = utils.parse_json(json)
+    if type(items) ~= 'table' then return end
+    for _, c in ipairs(items) do
+        if #danmaku.items < 50000 and type(c.text) == 'string' and finite_number(c.time) and c.time >= 0
+            and finite_number(c.color) and (c.mode == 1 or c.mode == 4 or c.mode == 5 or c.mode == 6) then
+            danmaku.items[#danmaku.items + 1] = c
+        end
+    end
+end)
+mp.register_script_message('mjc-danmaku-choices', function(json)
+    local items = utils.parse_json(json)
+    if type(items) ~= 'table' then return end
+    for _, choice in ipairs(items) do
+        if type(choice.id) == 'string' and type(choice.label) == 'string' and #danmaku.choices < 20000 then
+            danmaku.choices[#danmaku.choices + 1] = choice
+        end
+    end
+end)
+mp.register_script_message('mjc-danmaku-end', function()
+    danmaku.dirty = true; render_danmaku(); render_all()
+end)
+mp.register_event('end-file', function()
+    danmaku.items, danmaku.layout = {}, {}; danmaku_ov.data = ''; danmaku_ov:update()
+end)
+local function toggle_danmaku()
+    state.settings.danmakuEnabled = not state.settings.danmakuEnabled
+    render_danmaku()
+    mp.commandv('script-message', 'mjc-danmaku-action', 'toggle')
+end
 
 local ov_w, ov_h = 0, 0
 local res_logged = false
@@ -750,9 +884,9 @@ function render_bar()
         local transport_count = 1 + (state.settings.showSwitchMediaButton and 2 or 0)
             + (state.settings.showSkipButtons and 2 or 0)
         -- Fold or reflow before the new slider crowds transport or seeking.
-        local tiny = w < 440 * scale or w < (transport_count * 34 + 6 * 34 + 76 + 24) * scale
+        local tiny = w < 440 * scale or w < (transport_count * 34 + 7 * 34 + 76 + 24) * scale
         local volume_width = (tiny and 48 or 64) * scale
-        local control_width = ((tiny and 1 or transport_count) * 34 + (tiny and 3 or 6) * 34 + 36) * scale + volume_width
+        local control_width = ((tiny and 1 or transport_count) * 34 + (tiny and 4 or 7) * 34 + 36) * scale + volume_width
         local times_width = text_width(fmt_time(state.timepos), 14 * scale) + text_width(fmt_time(state.duration), 14 * scale)
         local compact = w < 640 * scale or w < control_width + times_width + 136 * scale
         state.narrow_controls, state.tiny_controls = tiny, tiny
@@ -814,6 +948,7 @@ function render_bar()
         end
         rbtn('more', '更多')
         rbtn('fs', '全屏 · 回车')
+        rbtn('danmaku', state.settings.danmakuEnabled and '关闭弹幕' or '开启弹幕')
         if not tiny then
             rbtn('speed', '倍速 ' .. tostring(state.speed) .. 'x')
             rbtn('sub', '字幕 · S')
@@ -833,6 +968,7 @@ function render_bar()
             zone(state.zones, slot.x, row_y, slot.x + bw, row_y + row_h, function()
                 if id == 'fs' then do_fullscreen()
                 elseif id == 'vol' then cmd('cycle', 'mute')
+                elseif id == 'danmaku' then toggle_danmaku()
                 else toggle_menu(id); state.sub_searching = false; state.menu_offset = 0 end
                 render_all()
             end, id)
@@ -1052,6 +1188,17 @@ function render_menu()
                     current = cur,
                 }
             end
+        elseif state.menu == 'danmaku-source' then
+            items[#items + 1] = {label = '选择弹幕来源与集数', header = true}
+            if #danmaku.choices == 0 then items[#items + 1] = {label = danmaku.status, header = true} end
+            for _, choice in ipairs(danmaku.choices) do
+                local id = choice.id
+                local selected = id == state.settings.danmakuSelection
+                items[#items + 1] = {label = (selected and '✓ ' or '') .. (choice.episode or choice.label),
+                    secondary = choice.title, current = selected, name = 'danmaku-choice:' .. id, action = function()
+                    cmd('script-message', 'mjc-danmaku-action', 'select', id); state.menu = nil
+                end}
+            end
         elseif state.menu == 'more' then
             items[#items + 1] = { label = '更多', header = true }
             if state.narrow_controls then
@@ -1096,9 +1243,29 @@ function render_menu()
                 label = '   媒体信息',
                 action = function() show_media_info() state.menu = nil end,
             }
+            items[#items + 1] = {label = state.settings.danmakuEnabled and '关闭弹幕' or '开启弹幕',
+                action = function() toggle_danmaku(); state.menu = nil end, current = state.settings.danmakuEnabled}
+            if danmaku.status ~= '' and state.settings.danmakuEnabled then
+                items[#items + 1] = {label = danmaku.status, header = true}
+            end
+            if #danmaku.choices > 0 then
+                items[#items + 1] = {label = '选择弹幕来源与集数', action = function() state.menu = 'danmaku-source'; state.menu_offset = 0 end}
+            end
+            items[#items + 1] = {label = '导入 XML 弹幕', action = function()
+                cmd('script-message', 'mjc-danmaku-action', 'import'); state.menu = nil
+            end}
+            items[#items + 1] = {label = '重新获取弹幕', action = function()
+                cmd('script-message', 'mjc-danmaku-action', 'retry'); state.menu = nil
+            end}
+            if state.settings.danmakuSource == 'api' then
+                items[#items + 1] = {label = '更换弹幕来源', action = function()
+                    cmd('script-message', 'mjc-danmaku-action', 'search'); state.menu = 'danmaku-source'; state.menu_offset = 0
+                end}
+            end
         end
 
         if #items > 0 then
+            if state.menu == 'danmaku-source' then row_h = 58 * scale end
             -- Keep long track lists on-screen and allow mouse-wheel pagination.
             local total_items = #items
             local max_rows = math.max(1, math.floor((bar_top - 34 * scale) / row_h))
@@ -1113,6 +1280,7 @@ function render_menu()
             local pw = 0
             for _, it in ipairs(items) do
                 pw = math.max(pw, text_width(it.label, fs))
+                if it.secondary then pw = math.max(pw, text_width(it.secondary, fs * 0.85)) end
             end
             pw = math.min(clamp(pw + 28 * scale, 150 * scale, 340 * scale), w - 2 * m)
             local ph = row_h * #items + 12 * scale
@@ -1132,10 +1300,16 @@ function render_menu()
 
             local iy = py + 6 * scale
             local mx, my = mouse_pos()
-            for _, it in ipairs(items) do
+            for index, it in ipairs(items) do
                 if it.header then
+                    local close_header = index == 1
                     draw_text(a, px + 14 * scale, iy + row_h * 0.22, fs * 0.9,
-                        ass_color(0.6, 1, 1, 1), it.label)
+                        ass_color(0.6, 1, 1, 1), fit_text(it.label, fs * 0.9, pw - (close_header and 58 or 28) * scale))
+                    if close_header then
+                        draw_text(a, px + pw - 24 * scale, iy + row_h * 0.15, 18 * scale, ass_color(0.9, 1, 1, 1), '×')
+                        zone(state.menu_zones, px + pw - 34 * scale, iy, px + pw - 6 * scale, iy + row_h,
+                            function() state.menu = nil; state.sub_searching = false; state.menu_offset = 0; render_all() end, 'menu-close')
+                    end
                 else
                     if it.current or (mx >= px and mx <= px + pw and my >= iy and my <= iy + row_h) then
                         draw_round_rect(a, px + 6 * scale, iy + 2 * scale, px + pw - 6 * scale, iy + row_h - 2 * scale,
@@ -1143,7 +1317,11 @@ function render_menu()
                     end
                     local col = it.current and ass_color(1, 1, 1, 1)
                         or ass_color(0.92, 1, 1, 1)
-                    draw_text(a, px + 14 * scale, iy + row_h * 0.2, fs, col, fit_text(it.label, fs, pw - 28 * scale))
+                    draw_text(a, px + 14 * scale, iy + (it.secondary and 7 * scale or row_h * 0.2), fs, col, fit_text(it.label, fs, pw - 28 * scale))
+                    if it.secondary then
+                        draw_text(a, px + 14 * scale, iy + 30 * scale, fs * 0.85,
+                            ass_color(0.65, 1, 1, 1), fit_text(it.secondary, fs * 0.85, pw - 28 * scale))
+                    end
                     local act = it.action
                     zone(state.menu_zones, px, iy, px + pw, iy + row_h, function()
                         act()
@@ -1390,8 +1568,8 @@ local function on_key(key, down)
     end
 end
 
-local function on_mbtn_left(event)
-    local x, y = mouse_pos()
+local function on_mbtn_left(event, x, y)
+    if not x or not y then x, y = mouse_pos() end
 
     if event.event == 'down' then
         state.pending_click = nil
@@ -1409,9 +1587,16 @@ local function on_mbtn_left(event)
                 z.action()
                 return
             end
+            local previous_menu = state.menu
             state.menu = nil
             state.sub_searching = false
-            render_menu()
+            state.menu_offset = 0
+            render_all()
+            local trigger = hit(state.top_zones, x, y) or hit(state.zones, x, y)
+            -- Dismissing a menu must not fall through into its opener and
+            -- reopen it (or turn an outside click into background playback).
+            if not trigger or trigger.name == previous_menu
+                or (previous_menu == 'danmaku-source' and trigger.name == 'more') then return end
         end
         local z = hit(state.top_zones, x, y) or hit(state.zones, x, y)
         if z then
@@ -1447,6 +1632,21 @@ local function on_mbtn_left(event)
             render_bar()
         end
     end
+end
+
+local function on_double_click(x, y)
+    state.pending_click = nil
+    activity()
+    -- On Windows this is the second physical press, not an extra event after
+    -- two down events. Controls and menus must receive that press immediately.
+    if state.info_visible or state.menu or hit(state.top_zones, x, y) or hit(state.zones, x, y) then
+        on_mbtn_left({event = 'down'}, x, y)
+        return
+    end
+    if not (state.bar_bounds and hit({state.bar_bounds}, x, y))
+        and mp.get_time() >= (state.block_gesture_until or 0)
+        and state.duration > 0
+        and state.settings.mouseLeftDoubleClick == 'playpause' then toggle_pause() end
 end
 
 mp.register_script_message('mjc-settings', function(json)
@@ -1490,11 +1690,14 @@ mp.register_script_message('mjc-pointer', function(event, sx, sy)
     state.native_pointer = {x = x, y = y}
     if event == 'down' then
         on_mbtn_left({event = 'down'})
+    elseif event == 'double' then
+        on_double_click(x, y)
     elseif event == 'move' then
         activity()
         if state.volume_drag then volume_at(x)
         elseif state.seek_drag then seek_to_frac(seek_frac_at(x)) end
         render_bar()
+        if state.menu then render_menu() end
     elseif event == 'up' then
         on_mbtn_left({event = 'up'})
         state.native_pointer = nil
@@ -1521,15 +1724,9 @@ mp.register_script_message('mjc-media-details', function(json)
     render_info()
 end)
 mp.register_script_message('mjc-double-click', function(mx, my)
-    state.pending_click = nil
-    activity()
     local x, y = tonumber(mx), tonumber(my)
     if not x or not y then x, y = mouse_pos() end
-    if not state.info_visible and not state.menu and not hit(state.top_zones, x, y)
-        and not hit(state.zones, x, y) and not (state.bar_bounds and hit({state.bar_bounds}, x, y))
-        and mp.get_time() >= (state.block_gesture_until or 0)
-        and state.duration > 0
-        and state.settings.mouseLeftDoubleClick == 'playpause' then toggle_pause() end
+    on_double_click(x, y)
 end)
 mp.register_script_message('mjc-escape', escape)
 mp.register_script_message('mjc-media-info', show_media_info)

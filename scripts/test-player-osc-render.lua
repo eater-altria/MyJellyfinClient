@@ -1,6 +1,8 @@
 -- Deterministic controller state over mpv's real GPU/ASS renderer.
 -- Used by the native render regression; all media and tracks are synthetic.
 local native_property, string_property = mp.get_property_native, mp.get_property
+local number_property = mp.get_property_number
+local danmaku_time
 local register_message = mp.register_script_message
 local native_command = mp.commandv
 local set_native_property = mp.set_property_native
@@ -22,6 +24,10 @@ mp.get_property = function(name)
     if name == 'aid' then return '3' end
     if name == 'media-title' then return 'stream?PlaySessionId=fixture' end
     return string_property(name)
+end
+mp.get_property_number = function(name, default)
+    if name == 'time-pos' and danmaku_time then return danmaku_time end
+    return number_property(name, default)
 end
 mp.observe_property = function(name, _, callback) observers[name] = callback end
 mp.register_script_message = function(name, callback) messages[name] = callback end
@@ -53,6 +59,22 @@ register_message('mjc-render-fixture', function(scale, mode)
         local dimensions = native_property('osd-dimensions')
         mouse = {x = dimensions.w * 0.45, y = dimensions.h - 99}
         observers['mouse-pos']('mouse-pos', mouse)
+    end
+    if mode == 'danmaku' then
+        danmaku_time = 4
+        messages['mjc-danmaku-begin']('{"danmakuEnabled":true,"danmakuFontSize":24,"danmakuOpacity":1,"danmakuArea":1,"danmakuDuration":8}', '弹幕渲染回归')
+        messages['mjc-danmaku-chunk']('[{"time":0,"mode":1,"color":16777215,"text":"滚动弹幕"},{"time":0,"mode":5,"color":16711680,"text":"弹幕渲染测试"},{"time":0,"mode":6,"color":65280,"text":"反向弹幕"}]')
+        messages['mjc-danmaku-end']()
+    end
+    if mode == 'danmaku-source' then
+        messages['mjc-danmaku-begin']('{"danmakuEnabled":true,"danmakuSource":"api","danmakuSelection":"91"}', '自动匹配成功，已加载 4 条弹幕')
+        messages['mjc-danmaku-choices']('[{"id":"91","label":"第1话 英灵召唤 · 测试来源","episode":"第1话 英灵召唤","title":"测试剧集 第一季(2011) from fixture"},{"id":"92","label":"第2话 · 测试来源","episode":"第2话 剧集标题","title":"测试剧集 第一季(2011) from fixture"}]')
+        messages['mjc-danmaku-end']()
+        for i = 1, 30 do
+            local name, value = debug.getupvalue(render_bar, i)
+            if name == 'state' then value.menu = 'danmaku-source'; value.menu_offset = 0; break end
+        end
+        render_all()
     end
     for i = 1, 30 do
         local name, value = debug.getupvalue(render_bar, i)
