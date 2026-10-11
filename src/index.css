@@ -63,6 +63,9 @@ body {
   background: linear-gradient(120deg, rgba(239, 245, 255, 0.48), rgba(245, 247, 251, 0.28) 58%, rgba(236, 244, 251, 0.42));
 }
 .app-titlebar { background: rgba(255, 255, 255, 0.28); backdrop-filter: blur(12px); box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.35); }
+.macos-window.app-shell { --workspace-inset-block: 18px; }
+.macos-titlebar { background: transparent; margin-left: 96px; }
+.macos-window .sidebar-surface { padding-top: 36px; }
 .app-workspace { position: relative; z-index: 1; gap: 12px; padding: 6px 12px 12px; }
 .app-sidebar { width: 188px; }
 .app-content { border-radius: 28px; background: rgba(255, 255, 255, 0.1); }

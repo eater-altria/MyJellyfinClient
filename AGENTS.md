@@ -10,7 +10,9 @@
 
 ## 项目定位
 
-这是一个 Windows x64 Jellyfin / Emby 桌面客户端，界面主要为中文，采用受 Apple Liquid Glass 启发的玻璃表面与浮动导航。前端使用 React 18、TypeScript、Vite、Tailwind CSS、Zustand 和 React Router；桌面壳使用 Tauri 2，原生播放使用独立 mpv 进程。
+这是一个 Windows x64 / macOS Jellyfin / Emby 桌面客户端，界面主要为中文，采用受 Apple Liquid Glass 启发的玻璃表面与浮动导航。前端使用 React 18、TypeScript、Vite、Tailwind CSS、Zustand 和 React Router；桌面壳使用 Tauri 2；Windows 原生播放使用独立 mpv 进程，macOS 使用同进程 libmpv OpenGL render API。macOS 当前为 SDR 输出，不能描述为已实现 Windows 的 HDR/gpu-next 行为。
+
+macOS 的媒体库接入、内嵌播放与 GPU 玻璃控件已完成验收，当前实测平台为 Apple Silicon M4。后续维护应沿用主应用播放入口；`prototypes/macos-libmpv/` 仅用于独立渲染实验。HDR/EDR 输出、Intel Mac 和 Universal 包不属于已验证范围。
 
 公开仓库：<https://github.com/eater-altria/MyJellyfinClient>。仓库源码、GitHub Release 和用户正在运行的安装版可能不是同一版本，排查前应核对提交和安装包来源。
 
@@ -28,7 +30,7 @@
 | `src/api/types.ts`、`helpers.ts` | 页面使用的统一媒体模型、列表规则、URL 规范化、错误及格式化 |
 | `src/api/detectServer.ts` | 按连接器调度公开探测；同一探测函数合并执行，手动协议保持优先 |
 | `src/utils/clientIdentity.ts`、`src/utils/defaultClientIdentity.json` | 客户端名称预设、共享兼容默认标识和文本规范化；设备 ID 仍由 API 使用原有持久值 |
-| `src-tauri/src/client_identity.rs` | 桌面 WebView 的真实 HTTP User-Agent、共享兼容版本与只读 Windows 版本查询 |
+| `src-tauri/src/client_identity.rs` | 桌面 WebView 的真实 HTTP User-Agent、共享兼容版本、Windows 实际版本查询与 macOS 平台/架构 |
 | `src/store/servers.ts` | 服务器登录状态、令牌、API 实例和持久化 |
 | `src/hooks/useServerReorder.ts`、`src/store/serverReorder.ts`、`src/components/ServerReorderFeedback.tsx` | 两处服务器排序的指针/键盘操作、临时拖拽状态、跟随预览及插入位置 |
 | `src/store/settings.ts`、`src/pages/Settings.tsx` | 设置定义、默认值、持久化和设置界面 |
@@ -53,7 +55,11 @@
 | `src/components/TitleBar.tsx`、`WindowResizeHandles.tsx` | 窗口标题栏和边缘缩放 |
 | `src/platform/window.ts` | Tauri 窗口 API 包装 |
 | `src-tauri/src/lib.rs` | 窗口创建、Tauri 命令注册和窗口事件 |
-| `src-tauri/src/player.rs` | Win32 mpv 宿主窗口、进程、IPC、光标、窗口比例和 TLS |
+| `src-tauri/src/player.rs` | Windows：Win32 mpv 宿主窗口、进程、IPC、光标、窗口比例和 TLS |
+| `src-tauri/src/player_macos.rs`、`player_macos.m` | macOS：Tauri 命令/会话隔离、Cocoa/CGL 视图、libmpv 异步命令、Lua 控件输入、GPU 玻璃与截图 |
+| `src-tauri/tauri.macos.conf.json`、`scripts/prepare-macos-runtime.py` | macOS 包配置、libmpv 动态库依赖图、相对加载路径、原生架构与真实最低系统版本 |
+| `scripts/env.sh`、`dev-tauri.sh`、`build-tauri.sh`、`scripts/README-sh.md` | Bash 运行/打包入口、平台选择、进程环境与使用说明 |
+| `scripts/test-macos-native.sh`、`test-macos-native.m`、`macos-fixture-server.cjs` | macOS 生产渲染桥回归与本地模拟服务器 |
 | `src-tauri/src/player_screenshot.rs` | 截图及 Windows 图片剪贴板 |
 | `src-tauri/src/player_osc_render.rs` | 原生控件、毛玻璃、截图隔离和开播窗口比例的真实渲染回归 |
 | `src-tauri/resources/mpv/portable_config/scripts/mjc-osc.lua` | 原生播放控件的 ASS 绘制、菜单和输入 |
@@ -65,7 +71,7 @@
 
 ## 环境与启动
 
-需要 Node.js 20+、全局 Rust/rustup/Cargo、Visual Studio C++ Build Tools、Windows SDK，以及本地 mpv。`rust-toolchain.toml` 指定 `stable-x86_64-pc-windows-msvc`；本项目不再携带 `.toolchain`，也不依赖旧的 GNU LLVM/MinGW 工具链。
+Windows 开发需要 Node.js 20+、全局 Rust/rustup/Cargo、Visual Studio C++ Build Tools、Windows SDK，以及本地 mpv。`rust-toolchain.toml` 指定 `stable-x86_64-pc-windows-msvc`；本项目不再携带 `.toolchain`，也不依赖旧的 GNU LLVM/MinGW 工具链。
 
 ```powershell
 npm ci
@@ -73,6 +79,17 @@ npm ci
 rustc -vV
 ./scripts/dev-tauri.ps1
 ```
+
+macOS 需要 Node.js 20+、本机 stable Rust、Xcode Command Line Tools、`pkg-config` 和 libmpv（可用 `brew install mpv pkg-config` 安装）。运行 `./scripts/dev-tauri.sh --desktop`，打包运行 `./scripts/build-tauri.sh --desktop`；在 macOS 上默认即为桌面模式，`--web` 仍走浏览器。入口仅在本次进程设置 `RUSTUP_TOOLCHAIN=stable`，不修改仓库的 Windows 工具链文件或全局 rustup 配置。Windows Git Bash 入口仍调用原 `.ps1`。详见 `scripts/README-sh.md`。
+
+```bash
+brew install mpv pkg-config
+./scripts/check-runtime.sh
+./scripts/dev-tauri.sh --desktop
+./scripts/build-tauri.sh --desktop
+```
+
+上述命令在 macOS 主机执行。shell 入口从任意目录定位仓库，前端工具缺失时按锁文件执行 `npm ci`，缓存写入 `.npm-cache/`；依赖锁文件更新后主动重新安装。macOS 不需要 Windows 的 EXE、DLL、WebView2Loader 或 MSVC。Linux 默认使用 `--web`，当前没有 Linux 原生播放后端。
 
 仅调试前端：`npm run dev:web`。浏览器回退播放器无法替代原生 mpv 的验证，原生窗口、HDR、截图剪贴板等行为必须在桌面环境核对。
 
@@ -86,15 +103,17 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
 
 ## 数据与清理
 
-- 开发脚本默认把 WebView2 数据保存在 `.local/webview2`；可通过 `MJC_WEBVIEW_DATA` 覆盖。安装版默认使用系统应用数据目录。
+- Windows 开发脚本默认把 WebView2 数据保存在 `.local/webview2`；可通过 `MJC_WEBVIEW_DATA` 覆盖。安装版默认使用系统应用数据目录。
 - Vite 文件监听排除 `.local`，避免 WebView2 独占 Cookie 等持久文件时触发 `EBUSY` 并终止开发服务；不能用删除开发数据解决监听问题。
-- 开发版截图保存在 `MJC_WEBVIEW_DATA/screenshots`（默认 `.local/webview2/screenshots`）；安装版优先使用系统图片目录的 `MyJellyfinClient` 文件夹，不可写时回退到应用本地数据目录的 `screenshots`。保存前验证真实文件写入权限，失败时清理本次预留文件；截图属于用户数据。
-- `.local` 包含开发账号、登录状态、设置和偏好，删除会重置开发版数据。它不是纯构建缓存。
-- 播放诊断默认写入 `MJC_WEBVIEW_DATA/logs/playback.log`（开发版默认 `.local/webview2/logs/playback.log`）；安装版使用应用本地数据目录的 `logs`，不可写时尝试应用缓存目录。每行 JSON 以独立播放诊断编号关联前端元数据/媒体源协商、所选协议标识、mpv 启动、真实版本/HTTP User-Agent、IPC 失败和警告/错误。约 2 MiB 后轮转为 `playback.log.1`，仅保留当前和上一份。密码、令牌、鉴权头与完整 URL 在前端和原生写入前脱敏；不记录账号、媒体标题、完整命令行或视频内容。后台限长队列不阻塞播放器，失败页面显示诊断编号和实际日志路径。已停止生成未脱敏的旧 `player/mpv-player.log`，不清理已有用户日志。
+- 开发版截图保存在 `MJC_WEBVIEW_DATA/screenshots`（Windows 默认 `.local/webview2/screenshots`，macOS 默认 `.local/macos/screenshots`）；安装版优先使用系统图片目录的 `MyJellyfinClient` 文件夹，不可写时回退到应用本地数据目录的 `screenshots`。保存前验证真实文件写入权限，失败时清理本次预留文件；截图属于用户数据。
+- Windows 的 `.local/webview2` 包含开发账号、登录状态、设置和偏好，删除会重置开发版数据；macOS 的 `.local/macos` 保存开发日志与截图。两者均不能按纯构建缓存清理。
+- 播放诊断默认写入 `MJC_WEBVIEW_DATA/logs/playback.log`（Windows 开发默认 `.local/webview2/logs/playback.log`，macOS 开发默认 `.local/macos/logs/playback.log`）；安装版使用应用本地数据目录的 `logs`，不可写时尝试应用缓存目录。每行 JSON 以独立播放诊断编号关联前端元数据/媒体源协商、所选协议标识、mpv 启动、真实版本/HTTP User-Agent、IPC 失败和警告/错误。约 2 MiB 后轮转为 `playback.log.1`，仅保留当前和上一份。密码、令牌、鉴权头与完整 URL 在前端和原生写入前脱敏；不记录账号、媒体标题、完整命令行或视频内容。后台限长队列不阻塞播放器，失败页面显示诊断编号和实际日志路径。已停止生成未脱敏的旧 `player/mpv-player.log`，不清理已有用户日志。Mac native 日志仅转交等级/前缀等安全字段，不直接输出 mpv 原始日志正文。
 - `.local`、`.codex-remote-attachments`、环境文件、密钥、日志、构建产物及 mpv 二进制不应提交。不要把用户提供的服务器地址、密码、令牌或截图写入源码和测试。
 - `node_modules`、`dist`、`src-tauri/target`、`src-tauri/gen`、`*.tsbuildinfo` 可重新生成。清理前先区分持久数据、运行资源和可再生产物；递归操作应验证绝对路径范围。
-- 必要运行资源包括 mpv、其控制脚本和毛玻璃 shader，以及 `src-tauri/resources/WebView2Loader.dll`，不能按普通临时文件删除。
-- 安装包通过 `tauri.conf.json` 明确收录 mpv 的 EXE、COM、DLL、`mjc-osc.lua` 和 `mjc-glass.glsl`，不收录开发运行产生的 `portable_config/cache`；不要为发布清空正在使用的开发数据。
+- Windows 必要运行资源包括 mpv EXE/COM/DLL、其控制脚本和毛玻璃 shader，以及 `src-tauri/resources/WebView2Loader.dll`。macOS 必要资源为 libmpv 及随附动态库、Lua 控件和 shader，不能删除已打包应用中的这些资源。
+- Windows 安装包通过 `tauri.conf.json` 明确收录 mpv 的 EXE、COM、DLL、`mjc-osc.lua` 和 `mjc-glass.glsl`；macOS 的 `tauri.macos.conf.json` 覆盖 Windows 专用资源并收录 `.dylib`。不收录开发运行产生的缓存；不要为发布清空正在使用的开发数据。`.tmp/macos-runtime/` 是可通过准备脚本重建的构建副本，与用户持久数据分开。
+
+macOS 的 WKWebView 不使用 WebView2 数据目录；开发版使用固定的独立 data store identifier，安装版使用默认应用数据存储，开发与安装账号分开。`MJC_WEBVIEW_DATA` 在 macOS 仅指定诊断和截图目录，默认开发日志/截图为 `.local/macos/`。设置 `MJC_NATIVE_TEST_MODE=1` 的显式测试会话使用不持久化的 WKWebView，不读写真实账号；测试同时指定 `.tmp/` 下的日志/截图目录。不能把这些行为描述为 macOS WebView 数据全部写入 `.local`。
 
 ## 媒体库与协议约定
 
@@ -115,7 +134,7 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
    剧集详情的季选择器右侧提供查看全部及左右滚动，查看全部进入所选季的完整剧集网格；季选择通过 `seasonId` 查询参数保留，返回时恢复。横向行与网格共用 `EpisodeRow` 的单集详情跳转和显示偏好，剧集请求失败保留重试。
    剧集、演职人员与类似作品的查看全部页继承外层媒体封面的临时应用背景，直接打开剧集网格时补取所属剧集背景；不持久化图片 URL，保留预览开关、路由/实例隔离与离开清理。
    电影/剧集 LOGO 独立放在封面背景上，仅保留贴近图形的轻微轮廓阴影，去掉整片底色与渐变；下方浅色玻璃信息卡顶部始终显示文字节目名，作为唯一的 h1。LOGO 原色和比例不变，无图、加载失败或关闭预览时仅移除外部 LOGO 区域；单集仍使用文字标题。关闭预览不请求详情背景或 LOGO，重新启用可重试图片；两页共用 `MediaDetailHeader`。
-10. 「设置 → 通用」分别配置 Jellyfin 和 Emby 客户端标识：对应产品的常用名称下拉、自定义名称、版本和设备名称存储于 `clientIdentities`。空值使用共享 `defaultClientIdentity.json` 的 RodelPlayer、2.2610.12.0 及 Windows PC 兼容标识；保留手动设置，各自的默认项只恢复对应产品三项。按实际服务器协议读取标识，登录、缓存/重建的 API 实例和连通性探测共用；尚未知产品的公开探测尝试两套不同标识，不发送账号、令牌或密码，网络/JSON 失败不重复等待同一端点。鉴权字段按 URL 编码，保留稳定的设备 ID；播放协商名称随客户端名称变化，但媒体能力仍按实际播放器生成。桌面 WebView 创建时设置真实 HTTP User-Agent 为同一共享名称/版本，并追加只读查询的实际 Windows NT 版本、构建号和架构，覆盖首次登录及其他 WebView HTTP 请求；设置页字段仅影响鉴权标识，不改变这一固定 UA。纯浏览器开发模式仍使用浏览器 UA，mpv 视频请求仍沿用原有 UA。不向外部图片/媒体 URL 附加本站鉴权标识或令牌；WebView UA 只含公开兼容名称/版本与平台信息。
+10. 「设置 → 通用」分别配置 Jellyfin 和 Emby 客户端标识：对应产品的常用名称下拉、自定义名称、版本和设备名称存储于 `clientIdentities`。空值使用共享 `defaultClientIdentity.json` 的 RodelPlayer、2.2610.12.0 及 Windows PC 兼容标识；保留手动设置，各自的默认项只恢复对应产品三项。按实际服务器协议读取标识，登录、缓存/重建的 API 实例和连通性探测共用；尚未知产品的公开探测尝试两套不同标识，不发送账号、令牌或密码，网络/JSON 失败不重复等待同一端点。鉴权字段按 URL 编码，保留稳定的设备 ID；播放协商名称随客户端名称变化，但媒体能力仍按实际播放器生成。桌面 WebView 创建时设置真实 HTTP User-Agent 为同一共享名称/版本；Windows 追加只读查询的实际 Windows NT 版本、构建号和架构，macOS 追加平台名称与架构，覆盖首次登录及其他 WebView HTTP 请求；设置页字段仅影响鉴权标识，不改变这一固定 UA。纯浏览器开发模式仍使用浏览器 UA，mpv 视频请求仍沿用原有 UA。不向外部图片/媒体 URL 附加本站鉴权标识或令牌；WebView UA 只含公开兼容名称/版本与平台信息。
 11. 已识别服务器的 `Authorization` 和 `X-Emby-Authorization` 必须使用同一协议前缀：Emby 使用 `Emby`，Jellyfin 使用 `MediaBrowser`。账号密码通过 `/Users/AuthenticateByName` 的 `Username` / `Pw` 换取服务器返回的 `AccessToken`，原样按服务器保存；客户端不生成、散列或跨应用借用令牌，也不为刷新令牌擅自重置持久设备 ID。
     部分代理的 CORS 仅允许 `Authorization`，不允许 `X-Emby-*`。公开探测遇到未取消、未超时的 fetch `TypeError` 时，可在同一超时窗口内仅用标准 `Authorization` 重试一次，仍不含账号、密码或令牌；只有此请求成功且公共响应有效才将 `authorizationOnly` 保存到该连接。此模式的登录及 API 请求仅发送标准鉴权头，令牌仍放在该头的 `Token` 字段，缓存/重建 API 保持一致。普通连接保留原双头和令牌头；登录与写操作不因网络错误自动重放，不关闭浏览器跨域或 TLS 校验。
 12. 编辑 Emby 连接可显式勾选「重新登记此服务器的登录设备」，并填写该连接的客户端名称、重新输入密码。仅该连接生成新的 `deviceId`，成功登录后与 `clientName` 一起保存；失败保留原连接。之后登录、缓存/重建 API、播放协商和流 URL 共用此固定 ID，客户端名称优先使用连接的覆盖值，版本及设备名称仍来自对应产品设置。其他连接和原有全局设备 ID 保持稳定；普通删除、添加、编辑和重新登录不自动重置设备身份。该选项用于服务端按首次设备登记限制播放的兼容情况，不应自动替用户选择客户端名称。
@@ -147,7 +166,7 @@ XML `<i><d p="时间,类型,字号,颜色,...">正文</d></i>` 的时间为秒�
 
 ## 手动检查更新
 
-「设置 → 通用 → 关于与更新」显示当前运行版本，只有点击「检查更新」才请求公开仓库的 `/releases/latest`，不在启动、打开设置或后台自动检查，不下载或安装更新。桌面版本来自 Tauri `getVersion`，浏览器版本来自打包的 `package.json`。只比较非草稿、非预发布的正式 Release；按语义版本数值及预发布规则比较，不将低版本提示为更新。无正式 Release、无需更新、新版本、超时、网络/限流及无效响应分别显示，可手动重试。检查期间防止重复请求，离开通用设置取消并忽略迟到结果；结果不持久化。GitHub 请求不附带媒体账号、令牌或鉴权头。发布页仅打开本项目固定的 GitHub Release URL；Windows 使用 `open_project_releases` 命令调用默认浏览器，不接受任意 URL 或程序参数。
+「设置 → 通用 → 关于与更新」显示当前运行版本，只有点击「检查更新」才请求公开仓库的 `/releases/latest`，不在启动、打开设置或后台自动检查，不下载或安装更新。桌面版本来自 Tauri `getVersion`，浏览器版本来自打包的 `package.json`。只比较非草稿、非预发布的正式 Release；按语义版本数值及预发布规则比较，不将低版本提示为更新。无正式 Release、无需更新、新版本、超时、网络/限流及无效响应分别显示，可手动重试。检查期间防止重复请求，离开通用设置取消并忽略迟到结果；结果不持久化。GitHub 请求不附带媒体账号、令牌或鉴权头。发布页仅打开本项目固定的 GitHub Release URL；Windows 使用 `open_project_releases` 命令调用默认浏览器，macOS 同一命令通过 `/usr/bin/open` 打开该固定地址；不接受任意 URL 或程序参数。
 
 ## 播放器不能退化的行为
 
@@ -158,10 +177,19 @@ XML `<i><d p="时间,类型,字号,颜色,...">正文</d></i>` 的时间为秒�
 - WebView 获得焦点后的 Esc，也必须经 `player_escape` 交给原生控件处理浮层；加载尚未完成时仍应能立即取消退出。
 - 网络慢或正在协商媒体源时，关闭必须取消请求；迟到回调不能重新启动播放或把用户导航回播放器。
 - mpv 宿主窗口在媒体就绪前保持隐藏，让客户端窗口控件可用。初始/失败退出的零位置不能覆盖服务器的续播位置。
-- 保留 `StartupGuard` 的启动失败回滚、正常停止清理和唯一的每次播放 IPC 名称；截图等异步任务不能串入下一次播放。
-- 创建进程时保留启动句柄，连接 IPC 期间检查真实退出码。`0xC0000142` 初始化失败只自动重试一次，超时或失败清理对应进程；继承应用的错误处理模式，避免阻塞式系统初始化弹窗，不修改系统设置。
+- Windows 保留 `StartupGuard` 的启动失败回滚、正常停止清理和唯一的每次播放 IPC 名称；截图等异步任务不能串入下一次播放。
+- Windows 创建进程时保留启动句柄，连接 IPC 期间检查真实退出码。`0xC0000142` 初始化失败只自动重试一次，超时或失败清理对应进程；继承应用的错误处理模式，避免阻塞式系统初始化弹窗，不修改系统设置。
 
-### 原生窗口与 IPC
+### macOS 原生后端
+
+- 媒体源协商、续播、字幕偏好、进度上报与播放退出继续由 `NativePlayer` 共用；macOS 使用透明 Overlay 原生标题栏和左上角系统红黄绿按钮，浏览背景与视频延伸至标题栏下。非全屏视频顶部 36px 用于窗口拖动，窗口比例不添加标题栏高度。红色按钮在播放页取消原生关闭并退出播放，其他页面关闭窗口；不带独立原型的「打开视频 / OpenGL」工具区。Windows 保持原有标题栏。
+- Cocoa/CGL 视图的创建、渲染、输入和销毁均在主线程。开启 libmpv advanced render control 支持 GPU 截图；运行期主线程只使用异步命令、观察属性和非阻塞事件，不能添加阻塞式 `mpv_get_property`/`mpv_command`，避免截图/渲染互相等待。native callbacks 只调度并合并主线程任务，不能在回调内调用 mpv。
+- `mjc-osc.lua` 以可选 `options/script-opts` 开启 Mac 玻璃桥，默认 Windows 行为保持不变。Mac 将 Lua 发布的六个面板几何转换为临时常量 shader，复用源 shader 的 OUTPUT pass；不在 CPU 或 JS 传输视频帧。控件隐藏时移除相应材质；截图期间隔离玻璃，保留字幕并排除 OSC/弹幕。
+- Mac 的停止、消息、Esc、WebView 按键和弹幕携带诊断编号，并在主线程再次检查播放代次。先收到停止、后进入启动处理器时也必须拒绝迟到启动；旧会话清理不能停止新会话。`file-loaded` 事件在 Rust 确认会话仍有效后才显示 native view；销毁后队列内回调不能访问已释放的 Rust context。
+- Mac 的 HTTPS 保持 `tls-verify=yes`，通过 Security.framework 只读取得系统默认根证书，写入本次播放临时 PEM 后设置 `tls-ca-file`；停止时清理临时目录。打包后不能依赖 Homebrew 编译时的 CA 文件路径，不自动导入证书或关闭校验。该实现不等同于同步全部用户 Keychain 信任策略，不能把未单测的自定义证书兼容描述为已验证。
+- Mac 当前目标为 SDR sRGB/BT.709，设置页禁用 HDR 字幕亮度调节并说明。不能承诺 Metal、gpu-next、HDR/EDR 或杜比视界显示已验证。
+
+### Windows 原生窗口与 IPC
 
 - mpv 通过 `--wid` 渲染到 Win32 子窗口。子窗口应为 React 标题栏预留 36 个逻辑像素，全屏时恢复完整视频区域。
 - 窗口比例计算应排除标题栏；最小化、最大化、全屏和还原不能互相破坏。窗口关闭时需清理 mpv。
@@ -172,12 +200,12 @@ XML `<i><d p="时间,类型,字号,颜色,...">正文</d></i>` 的时间为秒�
 
 ### UI、设置、TLS 与缩放
 
-- 控件字号和点击尺寸跟随 Windows DPI，不随窗口高宽整体缩小。小窗口通过分行、折叠到「更多」和菜单滚动适配。
+- 控件字号和点击尺寸跟随 Windows DPI 或 macOS backing scale，不随窗口高宽整体缩小。小窗口通过分行、折叠到「更多」和菜单滚动适配。
 - 窗口标题、原生画面标题及开播提示使用服务器元数据，不能回退到带鉴权参数的流 URL。双击画面按设置暂停/播放，控制面板和菜单的双击不触发背景播放动作。
 - Windows 的 `WM_LBUTTONDBLCLK` 替代第二次按下，仍需建立鼠标捕获并通过 `mjc-pointer double` 传入真实坐标。Lua 将控件/菜单上的第二次按下作为普通点击处理，滑块可继续拖动；只有视频背景执行双击播放手势。不能把控件上的双击消息直接丢弃，导致快速连续点击漏掉每第二次操作。
 - 播放器控制使用白色图标、半透明底栏和不同透明度的白色进度条，文字标签只在悬浮时出现；菜单选中项使用白色勾选。暂停不锁定控件，保留切换媒体、全屏、进度和音轨等操作；已移除暂停锁定设置、解锁提示和 K 锁定快捷键，旧设置迁移时删除此字段。
 - 控制栏进度条按未缓存底轨、真实缓存段、已播放进度依次叠加，白色不透明度分别为 18%、40%、82%。原生读取 `demuxer-cache-state/seekable-ranges`，合并重叠段并保留间断；浏览器读取媒体元素的 `buffered`。不按缓存字节数或下载速度推算位置；未知时长不画缓存段，缓存失效及切换/停止媒体时清除旧段，后台缓存更新不唤醒隐藏控件。
-- 原生玻璃由 `gpu-next` 的 `mjc-glass.glsl` 在低分辨率纹理上模糊，并在可见面板边缘做实时透镜折射和 RGB 色散；Lua 同步范围、圆角、DPI、视频显示区域和 `GLASS_MATERIAL` 参数，图标与文字仍由 ASS 清晰绘制。无可见玻璃面板时跳过玻璃处理，不用 CPU 截图实现背景效果。PQ、HLG 和线性 HDR 输出跳过 SDR 饱和度及亮背景压暗处理。保存视频截图通过 Lua 的 `mjc-capture` 暂时隔离全部玻璃处理并恢复参数，保留 GPU 色彩和字幕处理。
+- Windows 原生玻璃由 `gpu-next` 的 `mjc-glass.glsl` 在低分辨率纹理上模糊，并在可见面板边缘做实时透镜折射和 RGB 色散；Lua 同步范围、圆角、DPI、视频显示区域和 `GLASS_MATERIAL` 参数，图标与文字仍由 ASS 清晰绘制。macOS 通过 OpenGL render API 和玻璃桥复用这些 OUTPUT pass。无可见玻璃面板时跳过玻璃处理，不用 CPU 截图实现背景效果。Windows 的 PQ、HLG 和线性 HDR 输出跳过 SDR 饱和度及亮背景压暗处理。Windows 截图通过 Lua 的 `mjc-capture`，Mac 截图通过异步 render API 命令暂时隔离玻璃并恢复，均保留 GPU 色彩和字幕处理。
 - 空格仅切换播放/暂停，不更新控制栏活动时间或重新显示控制 UI；首次激活应用后也应直接可用。
 - 自动隐藏默认 3 秒，旧设置通过一次性版本迁移采用 3 秒；之后用户重新选择的间隔保持持久化。菜单、媒体信息和进度拖动期间保持控件可见。
 - ASS 行级对齐标签不要重复或冲突：文字应使用对应 `an7/an8/an9`，矢量绘制明确使用 `an7`。视觉位置与点击区域要同步。
@@ -185,8 +213,8 @@ XML `<i><d p="时间,类型,字号,颜色,...">正文</d></i>` 的时间为秒�
 - 「设置 → 播放 → 缓存」支持 1–8192 MB 的整数预读缓存上限，默认 150 MB，按十进制 MB 转为 `demuxer-max-bytes`（1 MB = 1,000,000 字节）；不改变后向缓存配置。回车或输入框失焦后保存，下次开始原生播放时生效；浏览器中禁用。旧设置补默认值，保存/读取及原生边界均校验范围。
 - 简繁字幕偏好不能只靠通用中文语言码；轨道记忆在同媒体源优先 ID，跨媒体源按语言、名称等元数据匹配。
 - 外挂字幕规则只过滤真正的外部字幕，不应误删服务器提取出的内嵌字幕。
-- mpv 的 HTTPS 使用只读导出的 Windows 信任根证书，保留 TLS 校验；不要用关闭校验来掩盖证书配置问题。
-- 原生媒体网络沿用 mpv 默认网络后端；诊断日志记录实际 `curl-enabled` 值，不能仅凭 HTTP 522 或不同后端推定原因。FFmpeg/Lavf 的本地兼容回归覆盖跨端口 302 重定向、媒体读取、必要请求头及不向跳转目标追加原 URL 的令牌，保持 TLS 校验与 Windows 信任根配置。
+- mpv 的 HTTPS 使用对应平台只读导出的根证书，保留 TLS 校验；不要用关闭校验来掩盖证书配置问题。
+- Windows 原生媒体网络沿用 mpv 默认网络后端；诊断日志记录实际 `curl-enabled` 值，不能仅凭 HTTP 522 或不同后端推定原因。Windows FFmpeg/Lavf 的本地兼容回归覆盖跨端口 302 重定向、媒体读取、必要请求头及不向跳转目标追加原 URL 的令牌，保持 TLS 校验与 Windows 信任根配置。不能将这组 Windows 回归直接记为 Mac 网络后端已通过相同检查。
 - 「适应窗口」保持完整视频帧的比例，宽屏显示含内嵌上下黑边的 16:9 视频时，左右留黑可能是正常比例结果；「裁切填充」由用户主动选择并完整铺满，不能恢复旧的 `panscan=0.4`。
 
 ## 验证命令
@@ -230,8 +258,20 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 
 若受限执行环境无法读取构建工具目录或系统临时目录，应区分权限问题和代码问题。必要时为本次验证指定可写的临时目录，不能据此改坏用户正常构建配置；不要在敏感输出中打印令牌。
 
+macOS 回归：`./scripts/test-macos-native.sh` 用合成 4K 10-bit HEVC、真实 WKWebView 与生产 Cocoa/libmpv bridge 验证 GPU 玻璃、OSC 几何、截图、缩放和销毁；截图像素读回仅用于测试。Rust 的 Mac 会话代次/取消回归不替代真实原生渲染。端到端本地模拟服务器可用 `node scripts/macos-fixture-server.cjs`，并在显式隔离测试会话内添加 `http://127.0.0.1:5199`，不使用真实账号。Mac 播放验证需核对菜单 Esc、标题栏退出、实际进度上报和没有原型工具区。
+
+```bash
+./scripts/test-macos-native.sh
+RUSTUP_TOOLCHAIN=stable cargo test --manifest-path src-tauri/Cargo.toml --lib
+```
+
+已完成的 Mac 验收覆盖媒体库原生播放与玻璃界面；自动回归分别覆盖生产渲染桥、会话取消/代次隔离及共用 React 播放/设置行为。浏览器回归可用 `MJC_TEST_CHROMIUM` 指定可信 Chrome/Chromium 或 chrome-headless-shell；这不替代 WKWebView/CGL 实机验证。HDR/EDR 色彩准确性、Intel 硬件和 Universal 打包需要独立记录验证结果，不从普通播放验收推断。
+
 ## 提交与发布
 
+- macOS 打包将已安装 libmpv 的实际 Mach-O 依赖图收集到 `.tmp/macos-runtime/`，修改副本的 install name 为 `@loader_path`/`@rpath` 并做本地 ad-hoc 签名，不改 Homebrew 原件。App 中明确收录这些库与 Lua/shader；不递归收录用户数据。最低系统版本取全部动态库的 `minos` 最大值（至少 14.0），同步到构建配置与 deployment target；不能把 macOS 26 bottle 打包成宣称兼容 macOS 14 的应用。当前只验证 Apple Silicon，本机库不支持自动生成 Universal 包。
+- macOS `build-tauri.sh` 默认使用 CI 模式跳过 DMG 的 Finder 美化 AppleScript，不请求或修改系统 Automation 权限；保留应用和 Applications 快捷入口。产物为 `src-tauri/target/release/bundle/macos/MyJellyfinClient.app` 与 `bundle/dmg/`；当前 Apple Silicon 依赖构建的最低系统版本为 macOS 26.0，后续以实际库的计算结果为准。
+- macOS 配置使用 `signingIdentity: "-"` 为完整应用做 ad-hoc 签名，配套 `hardenedRuntime: false`，避免没有 Team ID 的 libmpv 被库校验拒绝；仅影响此应用，不修改系统安全设置。未来 Developer ID 发布需重新核对全部动态库签名与 Hardened Runtime。Release 不嵌入工作区动态库搜索路径，debug 才保留。不能只签可执行文件而遗漏 `.app` 的资源签名；构建后运行 `codesign --verify --deep --strict src-tauri/target/release/bundle/macos/MyJellyfinClient.app`、`node scripts/test-macos-bundle.cjs`，并对实际 DMG 文件运行 `hdiutil verify`。启动回归使用非持久化 WebView 与临时诊断目录；核对包内库、Lua/shader、架构和最低系统版本，独立运行检查不得依赖工作区 `.tmp/macos-runtime/` 或 Homebrew 绝对路径。本地签名不等同 Developer ID 签名/公证，本地验收也不代表已推送或发布。
 - 工作前检查 `git status`、相关文件和当前用户修改。保留无关变更，不使用强制重置来制造干净工作区。
 - 提交前检查差异、相关测试、忽略规则和私密数据。提交、推送和 Release 按用户授权执行；成功必须以远程实际状态验证，网络失败不能报告已推送。
 - 当前仓库使用本地 `gh`。Git TLS 握手失败时可重试或检查连接，不要关闭证书校验。

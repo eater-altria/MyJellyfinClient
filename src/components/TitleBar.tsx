@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   isTauri,
+  isMacOSTauri,
   windowClose,
   windowIsMaximized,
   windowMinimize,
@@ -12,7 +13,7 @@ import { IconClose, IconMaximize, IconMinimize, IconPlay } from './icons';
 import { PLAYER_EXIT_EVENT } from '../player/exitPlayback';
 import { usePlaybackTitle } from '../player/playbackTitle';
 
-/** Frameless title bar with Windows window controls on the right. */
+/** Windows controls or a transparent drag region beneath native Mac controls. */
 export default function TitleBar({ dark }: { dark?: boolean }) {
   const [maximized, setMaximized] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -22,13 +23,32 @@ export default function TitleBar({ dark }: { dark?: boolean }) {
   const title = usePlaybackTitle((state) => state.title);
   const exiting = useRef(false);
   useEffect(() => { exiting.current = false; }, [location.pathname]);
-  const close = () => {
+  const close = useCallback(() => {
     if (!isPlayer) { void windowClose(); return; }
     if (exiting.current) return;
     exiting.current = true;
     const event = new Event(PLAYER_EXIT_EVENT, { cancelable: true });
     if (window.dispatchEvent(event)) navigate(-1);
-  };
+  }, [isPlayer, navigate]);
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  const isPlayerRef = useRef(isPlayer);
+  isPlayerRef.current = isPlayer;
+
+  useEffect(() => {
+    if (!isMacOSTauri) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void import('@tauri-apps/api/window').then(async ({ getCurrentWindow }) => {
+      const dispose = await getCurrentWindow().onCloseRequested((event) => {
+        if (!isPlayerRef.current) return;
+        event.preventDefault();
+        closeRef.current();
+      });
+      if (cancelled) dispose(); else unlisten = dispose;
+    });
+    return () => { cancelled = true; unlisten?.(); };
+  }, []);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -52,6 +72,16 @@ export default function TitleBar({ dark }: { dark?: boolean }) {
   }`;
 
   if (isPlayer && fullscreen) return null;
+
+  if (isMacOSTauri) {
+    if (fullscreen) return null;
+    return <div data-tauri-drag-region
+      className={`drag-region macos-titlebar absolute inset-x-0 top-0 z-30 select-none ${isPlayer ? 'h-9' : 'h-4'}`}>
+      {isPlayer && <div data-tauri-drag-region className="pointer-events-none mr-24 truncate text-center text-xs leading-9 text-white/70" title={title}>
+        {title || '播放器'}
+      </div>}
+    </div>;
+  }
 
   return (
     <div

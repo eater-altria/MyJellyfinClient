@@ -3,6 +3,14 @@ const RELEASES_PAGE_URL: &str = "https://github.com/eater-altria/MyJellyfinClien
 /// No arbitrary URL or executable is accepted from the WebView.
 #[tauri::command]
 pub fn open_project_releases() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("/usr/bin/open").arg(RELEASES_PAGE_URL)
+            .status().map_err(|_| "无法打开默认浏览器".to_owned())?;
+        return if status.success() { Ok(()) } else { Err("无法打开默认浏览器".into()) };
+    }
+    #[cfg(windows)]
+    {
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     let operation: Vec<u16> = "open\0".encode_utf16().collect();
@@ -14,4 +22,5 @@ pub fn open_project_releases() -> Result<(), String> {
             std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL)
     } as isize;
     if result <= 32 { Err("无法打开默认浏览器".into()) } else { Ok(()) }
+    }
 }

@@ -52,7 +52,9 @@ fn windows_platform() -> String {
 pub fn http_user_agent() -> String {
     #[cfg(windows)]
     { format_user_agent(Some(&windows_platform())) }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    { format_user_agent(Some(&format!("macOS; {}", std::env::consts::ARCH))) }
+    #[cfg(not(any(windows, target_os = "macos")))]
     { format_user_agent(None) }
 }
 

@@ -1,6 +1,6 @@
 # MyJellyfinClient
 
-一个受 Apple Liquid Glass 风格启发的 Jellyfin / Emby Windows 客户端。使用 **Tauri 2 + React 18 + TypeScript + Tailwind CSS** 构建。
+一个受 Apple Liquid Glass 风格启发的 Jellyfin / Emby 桌面客户端，支持 Windows x64 和 macOS。使用 **Tauri 2 + React 18 + TypeScript + Tailwind CSS** 构建。macOS 的媒体库原生播放与 GPU 玻璃界面已完成验收，当前实测为 Apple Silicon。
 
 ## 功能
 
@@ -9,7 +9,7 @@
 - 📚 媒体库浏览：排序、分页加载
 - 🔖 类型与风格、标签、收藏浏览及年份等组合筛选，服务器执行筛选；接近列表末尾自动加载下一批，返回保留已加载内容和滚动位置
 - 🎞️ 详情页：封面上的独立 Logo 与信息卡内的文字标题、演职人员、季/集列表、类似作品、收藏/已看标记
-- ▶️ **内嵌原生 mpv 播放器**：硬件解码（d3d11va 自动）、原生渲染嵌入主窗口、快进/快退秒数可配置、断点续播、播放进度上报服务器（浏览器 dev 环境回退到 HTML5 播放器）
+- ▶️ **内嵌原生 mpv 播放器**：Windows 使用独立 mpv 进程，macOS 使用 libmpv；自动硬件解码、GPU 画面与玻璃控件、可配置快进/快退、断点续播及服务器进度上报（浏览器开发模式回退到 HTML5/HLS 播放器）
 - ⚙️ 完整设置页：通用 / 列表 / 播放 / 界面 / 手势 / 视频 / 音频 / 字幕 等 10 个标签页，8 色主题切换
 - ⬆️ 手动检查更新：在「设置 → 通用 → 关于与更新」点击检查 GitHub 最新正式 Release，新版提供发布页入口，由用户下载并安装
 - 🔍 搜索、🕘 播放记录
@@ -25,7 +25,7 @@
 
 服务器卡片和左侧已连接列表均可按住拖拽排序，拖动时显示带图标和名称的跟随预览，松开后两处顺序同步保存，重启仍保留。也可跨区域拖放；Esc 取消，Alt+↑/↓ 可用键盘调整顺序。拖动到长列表边缘时自动滚动。
 
-「设置 → 通用」可分别调整 Jellyfin / Emby 的客户端名称、版本和设备名称；默认使用 RodelPlayer / 2.2610.12.0 / Windows PC 兼容标识，已手动设置的值保持不变。桌面 WebView 的 HTTP User-Agent 统一使用相同名称和版本，并附带实际 Windows 版本及架构。这里的客户端兼容版本与本应用的 Release 版本不同；mpv 媒体请求仍使用原有 User-Agent。
+「设置 → 通用」可分别调整 Jellyfin / Emby 的客户端名称、版本和设备名称；默认使用 RodelPlayer / 2.2610.12.0 / Windows PC 兼容标识，已手动设置的值保持不变。桌面 WebView 的 HTTP User-Agent 统一使用相同名称和版本，并附带平台信息：Windows 为实际系统版本与架构，macOS 为平台与架构。这里的客户端兼容版本与本应用的 Release 版本不同；mpv 媒体请求仍使用原有 User-Agent。
 
 部分 Emby 服务按首次设备登记限制播放。若登录正常但播放被拒绝，可在「编辑服务器」显式选择「重新登记此服务器的登录设备」，填写服务端支持的客户端名称并重新输入密码。成功后仅该连接保存新的固定设备 ID 和名称；不会重置其他连接或全局设备身份，也不会借用其他应用的令牌。
 
@@ -35,19 +35,32 @@
 
 ## 内嵌播放器
 
-应用内嵌 [mpv](https://mpv.io/)（shinchiro Windows 构建）作为播放内核：Rust 端在主窗口客户区创建 Win32 子窗口，mpv 通过 `--wid` 嵌入渲染，JSON IPC（命名管道）下发操作并回传播放位置。点击标题栏关闭按钮退出播放；Esc 优先关闭媒体信息或菜单，再退出播放。回车或 F 切换全屏，空格播放/暂停；暂停时其他操作保持可用，空格不会重新显示控制栏。双击画面播放/暂停，鼠标操作可在设置中调整。
+应用以 [mpv](https://mpv.io/) 作为播放内核，直接从媒体库和媒体详情进入内嵌播放：
 
-加载期间也可退出并取消请求。原生播放器使用 Windows 信任证书校验 HTTPS，支持音轨字幕偏好、截图、响应式控制栏，以及适应窗口/裁切填充。
+| 平台 | 原生画面 | 硬件解码 |
+| --- | --- | --- |
+| Windows x64 | shinchiro mpv 进程，通过 `--wid` 嵌入 Win32 子窗口，以命名管道 JSON IPC 控制 | mpv 自动选择，常用 D3D11VA |
+| macOS | 同进程 libmpv OpenGL render API，Cocoa/CGL 视图覆盖在 WKWebView 播放区域上方 | mpv 自动选择，已实测 VideoToolbox |
+
+两端共用媒体源协商、续播、音轨字幕偏好、服务器进度上报和 Lua OSC 控件。播放页只保留媒体标题栏、视频及浮动控件，已移除独立原型中的「打开视频 / OpenGL 渲染」白色工具区。
+
+点击标题栏关闭按钮退出播放并返回上一页；Esc 优先关闭媒体信息或菜单，再退出播放。回车或 F 切换全屏，空格播放/暂停；暂停时其他操作保持可用，空格不会重新显示控制栏。双击画面播放/暂停，鼠标操作可在设置中调整。
+
+加载期间也可退出并取消请求，迟到的启动或旧会话操作不能重新覆盖媒体库或影响新播放。原生播放器保留 HTTPS 校验：Windows 只读导出信任根，macOS 只读导出系统默认根证书供 libmpv 使用，不依赖 Homebrew 的 CA 文件路径。支持截图、响应式控制栏，以及适应窗口/裁切填充。
 
 「设置 → 播放 → 缓存」可调整 1–8192 MB 的前向预读缓存上限，默认 150 MB，下次开始原生播放时生效；浏览器中禁用。
 
 控制栏进度条使用三种白色深浅区分已播放、真实已缓存范围与未缓存区域；跳转后按实际缓存段更新，保留分段缓存之间的空白。桌面与浏览器播放器均支持。
 
-播放失败页面显示诊断编号和日志路径。分阶段诊断关联元数据、播放协商、mpv 启动、HTTP 错误和 IPC，写入前脱敏 URL、密码和令牌，并采用非阻塞队列与约 2 MiB 的两份日志轮转。开发版路径为 `.local/webview2/logs/playback.log`，安装版使用应用本地数据目录的 `logs`；无需清空账号数据来收集日志。
+播放失败页面显示诊断编号和日志路径。分阶段诊断关联元数据、播放协商和原生播放器事件，写入前脱敏 URL、密码和令牌，并采用非阻塞队列与约 2 MiB 的两份日志轮转。Windows 开发默认路径为 `.local/webview2/logs/playback.log`，macOS 为 `.local/macos/logs/playback.log`；安装版使用应用本地数据目录的 `logs`。Mac 不直接记录 mpv 原始日志正文。无需清空账号数据来收集日志。
 
 播放器标题使用媒体元数据；原生控制栏和菜单采用半透明玻璃背景，包含实时背景模糊、边缘折射及轻微色散，配合白色图标及悬浮文字提示，默认静止 3 秒后隐藏。窗口在视频尺寸可用时按完整视频的显示比例自适应，保留视频内的黑边，不自动裁切。Alt+Tab 返回应用后可直接使用空格、回车。截图保存清晰视频画面；优先使用系统图片目录的 `MyJellyfinClient` 文件夹，不可写时使用应用本地数据目录；开发版使用开发数据目录下的 `screenshots`，保存成功会显示实际路径。
 
-控件隐藏后鼠标移动通过原生消息直接唤醒；mpv 子窗口迟到或重新接管输入时，宿主会恢复输入路由。WebView 持有焦点时仍可使用播放快捷键和方向键长按，失焦释放临时按键状态。菜单可通过再次点击触发按钮、顶部 ×、点击外部或 Esc 关闭，不会在同一次点击中重新打开或误触背景播放。
+控件隐藏后鼠标移动通过原生消息直接唤醒；Windows 的 mpv 子窗口迟到或重新接管输入时，宿主会恢复输入路由，Mac 则由 Cocoa 视图转发输入并同步显示缩放。WebView 持有焦点时仍可使用播放快捷键和方向键长按，失焦释放临时按键状态。菜单可通过再次点击触发按钮、顶部 ×、点击外部或 Esc 关闭，不会在同一次点击中重新打开或误触背景播放。
+
+macOS 当前输出目标为 SDR sRGB/BT.709，已实测合成 4K 10-bit HEVC 硬解与 GPU 玻璃。HDR 片源解码或色调映射不等同于 HDR/EDR 显示输出；HDR/EDR 输出尚未纳入已验证能力，Mac 的 HDR 字幕亮度设置暂不可用。
+
+### Windows 播放资源
 
 mpv 二进制（解压后约 120MB，不提交 Git）放置在 `src-tauri/resources/mpv/`。开发与打包脚本在 EXE、COM 或 DLL 缺失或为空时，会自动从 [mpv-winbuild-cmake](https://github.com/shinchiro/mpv-winbuild-cmake/releases) 的最新 Release 下载普通 x86_64 构建，校验包大小和 SHA-256，再使用 Windows 自带的 `tar.exe` 解压并安装完整的同版本二进制。已有完整资源时直接使用，不联网或自动升级。仅安装 `mpv.exe`、`mpv.com` 和全部随附 DLL，保留仓库中的 `portable_config/scripts/mjc-osc.lua` 和 `portable_config/shaders/mjc-glass.glsl`。
 
@@ -82,13 +95,36 @@ mpv 二进制（解压后约 120MB，不提交 Git）放置在 `src-tauri/resour
 
 ## 开发
 
-需要：Node.js 20+、全局安装的 Rust/Cargo（Windows MSVC 工具链），以及 Visual Studio C++ Build Tools 和 Windows SDK。
+### Windows
+
+需要 Node.js 20+、全局安装的 Rust/Cargo（Windows MSVC 工具链），以及 Visual Studio C++ Build Tools 和 Windows SDK。
+
+```powershell
+npm ci
+.\scripts\dev-tauri.ps1
+```
+
+### macOS 原生运行
+
+需要 Node.js 20+、npm、本机 stable Rust、Xcode Command Line Tools、`pkg-config` 和 libmpv。
 
 ```bash
+brew install mpv pkg-config
 npm ci
-scripts\dev-tauri.ps1   # 启动 vite + tauri dev（沙箱环境可加 $env:MJC_WEBVIEW_DATA 指向可写目录）
-npm run dev:web         # 仅浏览器中调试前端 (http://localhost:5173，回退 HTML5 播放器)
+./scripts/check-runtime.sh
+./scripts/dev-tauri.sh --desktop
 ```
+
+macOS 的 shell 入口默认选择桌面模式，只为当前进程使用本机 Rust 工具链，保留仓库的 Windows `rust-toolchain.toml`。开发账号位于独立 WKWebView 数据存储，与安装版分开；`MJC_WEBVIEW_DATA` 在 Mac 只指定日志和截图，开发默认 `.local/macos/`。正常使用不设置 `MJC_NATIVE_TEST_MODE`，该变量仅用于不持久化账号的隔离测试会话。详见 [shell 入口说明](scripts/README-sh.md)。
+
+### 浏览器调试
+
+```bash
+./scripts/dev-tauri.sh --web
+# 或 npm run dev:web
+```
+
+开发服务默认使用 5173 端口，退出启动命令可停止服务。浏览器采用 HTML5/HLS 回退播放器，支持的编码由浏览器决定；它不能替代桌面原生验证。Linux 当前默认运行 Web 模式。
 
 ### 扩展服务器连接器
 
@@ -118,22 +154,55 @@ export const serverConnectors = {
 
 ## 构建
 
-```bash
-scripts\build-tauri.ps1  # 产出 NSIS 安装包 (src-tauri/target/release/bundle/)
-scripts\build-portable.ps1  # 在安装包构建后生成单 EXE 便携版 (bundle/portable/)
+### Windows 安装包与便携版
+
+```powershell
+.\scripts\build-tauri.ps1
+.\scripts\build-portable.ps1
 ```
 
-开发脚本使用全局 Cargo，不再携带工作区 Rust 工具链。开发账号和设置保存在 `.local/webview2/`（不提交 Git）；安装版使用系统应用数据目录。`node_modules/`、`dist/`、`src-tauri/target/` 和 TypeScript 增量缓存均可重新生成。mpv 二进制保留在 `src-tauri/resources/mpv/`，控制脚本 `portable_config/scripts/mjc-osc.lua` 属于应用源码。
+Windows 的 NSIS 与便携输出分别在 `src-tauri/target/release/bundle/nsis/`、`bundle/portable/`。Git Bash 可使用对应的 `build-tauri.sh --desktop` 和 `build-portable.sh` 入口。
+
+开发脚本使用全局 Cargo，不再携带工作区 Rust 工具链。Windows 开发账号和设置保存在 `.local/webview2/`（不提交 Git）；安装版使用系统应用数据目录。`node_modules/`、`dist/`、`src-tauri/target/` 和 TypeScript 增量缓存均可重新生成。mpv 二进制保留在 `src-tauri/resources/mpv/`，控制脚本 `portable_config/scripts/mjc-osc.lua` 属于应用源码。
 
 Vite 不监听 `.local/`，避免 WebView2 锁定 Cookie 等数据文件时出现 `EBUSY`。这类监听错误应检查排除规则，不要删除账号和设置数据。
 
-构建脚本先处理 mpv 运行资源签名，再由 Tauri 在打包过程中签名应用程序、卸载程序和安装包。签名只使用已有的本机开发证书，未找到时跳过；不会自动安装证书。开发证书不等同于公开受信任的商业代码签名证书。
+Windows 构建脚本先处理 mpv 运行资源签名，再由 Tauri 在打包过程中签名应用程序、卸载程序和安装包。签名只使用已有的本机开发证书，未找到时跳过；不会自动安装证书。开发证书不等同于公开受信任的商业代码签名证书。
 
-Release 提供 `x64-setup.exe` 安装包和 `x64-portable.exe` 单文件便携版。便携版无需安装或管理员权限，启动时将主程序、mpv、DLL、控制脚本和 shader 解包到独立临时目录，退出后清理。账号、设置、截图和播放诊断保存在 EXE 旁的 `MyJellyfinClient-data/`，移动到其他位置时应携带该目录；不能把这份用户数据当作临时缓存删除。请放在可写目录中运行。
+Windows Release 提供 `x64-setup.exe` 安装包和 `x64-portable.exe` 单文件便携版。便携版无需安装或管理员权限，启动时将主程序、mpv、DLL、控制脚本和 shader 解包到独立临时目录，退出后清理。账号、设置、截图和播放诊断保存在 EXE 旁的 `MyJellyfinClient-data/`，移动到其他位置时应携带该目录；不能把这份用户数据当作临时缓存删除。请放在可写目录中运行。
 
 便携版需要系统已有 [Microsoft Edge WebView2 Runtime](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution)，不会安装运行时或修改系统配置；缺少 WebView2 时可使用常规安装包。单文件封装使用 [NSIS](https://nsis.sourceforge.io/Docs/Chapter4.html) 的临时解包与等待进程退出机制，并非将 mpv 静态链接进主程序。两种包均不包含 `.local/` 账号、开发日志或播放器缓存。
 
+### macOS 应用与 DMG
+
+```bash
+./scripts/build-tauri.sh --desktop
+```
+
+输出 `.app` 与 `.dmg`：
+
+- `src-tauri/target/release/bundle/macos/MyJellyfinClient.app`
+- `src-tauri/target/release/bundle/dmg/MyJellyfinClient_<版本>_aarch64.dmg`（Apple Silicon）
+
+准备脚本将 libmpv 及非系统动态库复制到 `.tmp/macos-runtime/`，修复为相对加载路径，再随应用收录到 `Contents/Resources/mpv/lib/`。包内同时包含 Lua OSC 和玻璃 shader，运行机不需另装 Homebrew。构建副本可重建，不包含账号、日志或开发缓存。
+
+最低 macOS 版本取实际动态库要求的最大值，至少 14.0。**当前已验收的 Apple Silicon 构建包要求 macOS 26.0**，这来自本机依赖的部署版本；不能仅降低配置数值就宣称兼容旧系统。Intel Mac 与 Universal 包尚未实测。
+
+动态库副本和完整 `.app` 使用 ad-hoc 签名；这是本地构建包，未做 Developer ID 公证。此本地签名配置关闭应用的 Hardened Runtime，避免无 Team ID 的 libmpv 被库校验拒绝；不修改系统安全设置。未来 Developer ID 发布需重新核对全部动态库签名与 Hardened Runtime。Release 仅从包内加载 libmpv，工作区动态库搜索路径只用于 debug。DMG 默认跳过 Finder 美化 AppleScript，仍提供应用和 Applications 快捷入口，不自动修改系统 Automation 权限。本地打包与验收不代表 GitHub Release 已发布 macOS 附件。
+
+构建后核对完整应用签名，并对实际生成的 DMG 文件运行 `hdiutil verify`：
+
+```bash
+codesign --verify --deep --strict src-tauri/target/release/bundle/macos/MyJellyfinClient.app
+```
+
+### Web 静态包
+
+`./scripts/build-tauri.sh --web` 生成 `dist/` 及 `.tmp/web-packages/` 下的静态资源压缩包和 SHA-256。解压后通过 HTTP 服务访问；它不是桌面安装包。
+
 ## 验证
+
+前端与共用播放逻辑检查两端通用；下面的 EXE/PowerShell 命令用于 Windows 原生回归：
 
 ```powershell
 npm run build
@@ -146,7 +215,16 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 & ./src-tauri/resources/mpv/mpv.com --no-config --vo=null --idle=yes --script=scripts/test-player-osc.lua
 ```
 
-原生测试需要按上述步骤准备 mpv。
+Windows 原生测试需要按上述步骤准备 mpv。macOS 使用生产渲染桥及本机 libmpv：
+
+```bash
+./scripts/test-macos-native.sh
+RUSTUP_TOOLCHAIN=stable cargo test --manifest-path src-tauri/Cargo.toml --lib
+```
+
+Mac 原生回归使用合成 4K 10-bit HEVC、真实 WKWebView 和 Cocoa/CGL 视图，验证 GPU 玻璃像素变化、OSC 几何、截图生成、缩放和销毁；Rust 回归检查会话代次与取消隔离。媒体库进入播放、菜单 Esc、标题栏返回与服务器进度上报也已通过本地模拟服务器验证，媒体库播放与玻璃布局已完成验收。
+
+浏览器组件回归可通过 `MJC_TEST_CHROMIUM` 指定可信 Chrome/Chromium 或 chrome-headless-shell，使用独立临时 profile；这类检查不替代 WKWebView/CGL 实机验证。HDR/EDR 输出和不同 Mac 硬件需单独验证，不从此次普通播放验收推断。
 
 ## 说明
 

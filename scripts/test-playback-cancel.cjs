@@ -26,7 +26,7 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-function mount(protocol, pending) {
+function mount(protocol, pending, macos = false) {
   const effects = [], calls = [], keys = new Map(), events = new Map(), states = [];
   const item = { Id: 'movie', Name: 'Test', UserData: { PlaybackPositionTicks: 1200000000 },
     MediaSources: [{ Id: 'source', Container: 'mp4', SupportsDirectPlay: true }] };
@@ -62,7 +62,7 @@ function mount(protocol, pending) {
     '../player/danmakuSettings': require('./source-bundle.cjs')('src/player/danmakuSettings.ts'),
     '../api/mediaServer': require('./source-bundle.cjs')('src/api/mediaServer.ts'),
     '../hooks/useBrowseActivity': { useBrowseActivity: () => true },
-    react: { useEffect: fn => effects.push(fn), useRef: current => ({ current }),
+    react: { useCallback: fn => fn, useEffect: fn => effects.push(fn), useRef: current => ({ current }),
       useState: initial => [initial, value => states.push(value)] },
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
     'react-router-dom': { useParams: () => ({ serverId: 'server', itemId: 'movie' }), useLocation: () => ({ pathname: '/player/server/movie' }),
@@ -86,7 +86,11 @@ function mount(protocol, pending) {
     '../components/LiquidGlass': { default: function LiquidGlass() {} },
     '../player/liquid-glass.css': {},
     '../player/exitPlayback': { PLAYER_EXIT_EVENT: 'mjc:exit-playback' },
-    '../platform/window': { isTauri: false, windowClose: () => calls.push(['window-close']), windowIsMaximized: async () => false,
+    '@tauri-apps/api/window': { getCurrentWindow: () => ({ onCloseRequested: async handler => {
+      events.set('native-close', handler);
+      return () => events.delete('native-close');
+    } }) },
+    '../platform/window': { isTauri: false, isMacOSTauri: macos, windowClose: () => calls.push(['window-close']), windowIsMaximized: async () => false,
       windowIsFullscreen: async () => false, windowMinimize() {}, windowToggleMaximize() {} },
     './icons': { IconClose() {}, IconMaximize() {}, IconMinimize() {}, IconPlay() {} },
   };
@@ -103,7 +107,9 @@ function mount(protocol, pending) {
   const view = bundle.exports.default();
   const cleanup = effects.find(effect => effect.toString().includes('createPlaybackDiagnostics'))() ?? (() => {});
   const title = {exports:{}};
-  new Function('require', 'module', 'exports', 'window', titleCode)(name => modules[name], title, title.exports, fakeWindow);
+  // Inject the native window bridge into the actual title-bar effect.
+  const bridgedTitleCode = titleCode.replaceAll('import("@tauri-apps/api/window")', 'Promise.resolve(require("@tauri-apps/api/window"))');
+  new Function('require', 'module', 'exports', 'window', bridgedTitleCode)(name => modules[name], title, title.exports, fakeWindow);
   const header = title.exports.default({ dark: true });
   const findClose = element => {
     if (element?.props?.title === '关闭播放器') return element;
@@ -113,16 +119,34 @@ function mount(protocol, pending) {
     }
   };
   const closeButton = findClose(header);
-  assert(closeButton, 'Player title bar must provide a close control');
+  if (macos) {
+    assert(!closeButton, 'Mac must use the system traffic lights without Windows controls');
+    effects.find(effect => effect.toString().includes('onCloseRequested'))();
+  } else assert(closeButton, 'Player title bar must provide a close control');
   return { calls, events, states, signals, delayed, item, cleanup, renderHeader: () => title.exports.default({ dark: true }),
     key: (key, repeat = false) => keys.get('keydown')({ key, repeat, preventDefault() {} }),
     keyUp: key => keys.get('keyup')({ key, preventDefault() {} }),
     blur: () => keys.get('blur')(),
     escape: () => keys.get('keydown')({ key: 'Escape', preventDefault() {} }),
-    close: () => closeButton.props.onClick() };
+    close: () => macos ? events.get('native-close')({ preventDefault() { calls.push(['prevent-native-close']); } }) : closeButton.props.onClick() };
 }
 
 (async () => {
+  for (const pending of ['item', 'info', 'ipc', 'media', 'noserver']) {
+    const player = mount('emby', pending, true);
+    await flush();
+    player.close();
+    assert(player.calls.some(call => call[0] === 'prevent-native-close'), 'Mac red button must cancel closing the app');
+    assert.equal(player.calls.filter(call => call[0] === 'navigate').length, 1);
+    assert(player.signals.every(signal => signal.aborted), 'Mac close must cancel pending media requests');
+    player.close();
+    assert.equal(player.calls.filter(call => call[0] === 'navigate').length, 1);
+    player.cleanup();
+    player.delayed.resolve(pending === 'info' ? { MediaSources: player.item.MediaSources } : player.item);
+    await flush();
+    assert.equal(player.calls.filter(call => call[0] === 'start_playback').length, pending === 'ipc' || pending === 'media' ? 1 : 0);
+  }
+  console.log('PASS: Mac native close cancels window destruction and exits loading/playing/error sessions; no Windows controls or late starts');
   for (const protocol of ['jellyfin', 'emby']) {
     for (const pending of ['item', 'info', 'ipc', 'media']) {
       // Jellyfin's direct-play fast path skips playback-info negotiation.

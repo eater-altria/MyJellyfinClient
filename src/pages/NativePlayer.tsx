@@ -209,10 +209,10 @@ export default function NativePlayer() {
               reportStopped();
               navigate(`/player/${serverId}/${next.Id}`, { replace: true });
             } else {
-              await invoke('player_message', { message: e.payload === 'next' ? '没有下一项媒体' : '没有上一项媒体' });
+              await invoke('player_message', { diagnosticId: trace.id, message: e.payload === 'next' ? '没有下一项媒体' : '没有上一项媒体' });
             }
           } catch {
-            if (!cancelled && !done) await invoke('player_message', { message: '无法获取相邻媒体，请稍后重试' }).catch(() => {});
+            if (!cancelled && !done) await invoke('player_message', { diagnosticId: trace.id, message: '无法获取相邻媒体，请稍后重试' }).catch(() => {});
           } finally { switching = false; }
         })) return;
         if (!await subscribe<{ diagnosticId: string; action: string; id?: string }>('mpv://danmaku-action', e => {
@@ -229,7 +229,7 @@ export default function NativePlayer() {
           trace.record('playback.mpv-error', details);
           setError(details.message);
           setStarting(false);
-          invoke('stop_playback').catch(() => {});
+          invoke('stop_playback', { diagnosticId: trace.id }).catch(() => {});
         })) return;
 
         stage = 'metadata';
@@ -336,7 +336,7 @@ export default function NativePlayer() {
       if (e.key === ' ' || e.key === 'Enter') {
         if (!loaded) return;
         e.preventDefault();
-        await invoke('player_keyboard_action', { key: e.key === ' ' ? 'SPACE' : 'ENTER' }).catch(() => {});
+        await invoke('player_keyboard_action', { diagnosticId: trace.id, key: e.key === ' ' ? 'SPACE' : 'ENTER' }).catch(() => {});
         return;
       }
       if (e.key !== 'Escape') {
@@ -350,7 +350,7 @@ export default function NativePlayer() {
       // The webview can keep focus after a title-bar interaction. Loaded
       // playback still delegates Escape to the OSC's modal/menu stack.
       if (!loaded) { finishAndBack(); return; }
-      try { if (!await invoke<boolean>('player_escape')) finishAndBack(); }
+      try { if (!await invoke<boolean>('player_escape', { diagnosticId: trace.id })) finishAndBack(); }
       catch { finishAndBack(); }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -394,7 +394,7 @@ export default function NativePlayer() {
       window.removeEventListener(PLAYER_EXIT_EVENT, onClose);
       unlistens.forEach((u) => u());
       reportStopped();
-      if (playbackRequested) invoke('stop_playback').catch(() => {});
+      if (playbackRequested) invoke('stop_playback', { diagnosticId: trace.id }).catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverId, itemId, active]);

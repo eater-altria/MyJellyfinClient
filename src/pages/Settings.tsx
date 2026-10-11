@@ -4,7 +4,7 @@ import { useSettings, AccentColor, AppSettings, PLAYER_CACHE_MIN_MB, PLAYER_CACH
 import Toggle from '../components/Toggle';
 import LiquidGlass from '../components/LiquidGlass';
 import UpdateCheck from '../components/UpdateCheck';
-import { isTauri } from '../platform/window';
+import { isTauri, isMacOSTauri } from '../platform/window';
 import { availableServerConnectors, getServerConnector, serverProtocolName } from '../api/mediaServer';
 import type { ClientIdentity, ClientIdentityProtocol } from '../utils/clientIdentity';
 import { danmakuDisplayDuration } from '../player/danmakuSettings';
@@ -541,7 +541,8 @@ function SubtitleTab() {
             { label: '不加载', value: 'none' },
           ]}
         />
-        <ToggleRow label="随 HDR 亮度调整字幕" field="hdrSubtitle" disabled={!isTauri} />
+        <ToggleRow label="随 HDR 亮度调整字幕" field="hdrSubtitle" disabled={!isTauri || isMacOSTauri} />
+        {isMacOSTauri && <p className="text-xs text-text-secondary">macOS 播放器当前输出 SDR，暂不支持 HDR 字幕亮度调节。</p>}
         <div className="px-5 py-4 text-[12px] leading-relaxed text-text-secondary">桌面播放器可按 HDR 画面亮度调整字幕；关闭后使用 SDR 白色亮度。</div>
       </Section>
     </div>

@@ -7,6 +7,7 @@ import AppBackdrop from './components/AppBackdrop';
 import BrowsePageHost from './components/BrowsePageHost';
 import { useSettings } from './store/settings';
 import { useServerReachability } from './hooks/useServerReachability';
+import { isMacOSTauri } from './platform/window';
 
 const DEFAULT_MODULE_PATH: Record<string, string> = {
   files: '/files',
@@ -31,10 +32,10 @@ export default function App() {
   }, [location.pathname, navigate]);
 
   return (
-    <div className={`${isPlayer ? 'bg-black' : 'app-shell'} flex h-full flex-col`}>
+    <div className={`${isPlayer ? 'bg-black' : 'app-shell'} ${isMacOSTauri ? 'macos-window relative' : ''} flex h-full flex-col`}>
       {!isPlayer && <AppBackdrop />}
       <TitleBar dark={isPlayer} />
-      {isPlayer && <WindowResizeHandles />}
+      {isPlayer && !isMacOSTauri && <WindowResizeHandles />}
       <div className={`${isPlayer ? '' : 'app-workspace'} flex min-h-0 flex-1`}>
         {!isPlayer && <Sidebar />}
         <main className={`${isPlayer ? '' : 'app-content'} min-h-0 min-w-0 flex-1 overflow-hidden`}>

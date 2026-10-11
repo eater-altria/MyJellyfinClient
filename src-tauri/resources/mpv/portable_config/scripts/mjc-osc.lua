@@ -5,7 +5,10 @@
 local assdraw = require('mp.assdraw')
 local utils = require('mp.utils')
 
-local FONT = 'Microsoft YaHei'
+local backend_options = mp.get_property_native('options/script-opts') or {}
+local FONT = backend_options['mjc-font'] or 'Microsoft YaHei'
+-- libmpv's OpenGL renderer uses a native bridge for dynamic glass geometry.
+local glass_bridge = backend_options['mjc-glass-bridge'] == 'yes'
 local SEEK_OPACITY = { track = 0.18, buffered = 0.40, played = 0.82 }
 
 local state = {
@@ -208,6 +211,11 @@ local function publish_glass()
     for _, key in ipairs(keys) do signature[#signature + 1] = string.format('%.3f', values[key]) end
     signature = table.concat(signature, ',')
     if signature == last_glass_params then return end
+    if glass_bridge then
+        mp.commandv('script-message', 'mjc-glass-surfaces', utils.format_json(values))
+        last_glass_params = signature
+        return
+    end
     local opts = mp.get_property_native('glsl-shader-opts') or {}
     for _, key in ipairs(keys) do opts['mjc-glass/' .. key] = string.format('%.3f', values[key]) end
     local ok, err = mp.set_property_native('glsl-shader-opts', opts)

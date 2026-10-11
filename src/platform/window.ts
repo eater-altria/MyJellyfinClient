@@ -3,6 +3,10 @@
 
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
+declare global { interface Window { __MJC_PLATFORM__?: 'macos'; } }
+/** Native backend capability marker injected before the app loads. */
+export const isMacOSTauri = isTauri && window.__MJC_PLATFORM__ === 'macos';
+
 type Win = import('@tauri-apps/api/window').Window;
 
 let cached: Win | null = null;
