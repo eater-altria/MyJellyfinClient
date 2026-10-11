@@ -214,8 +214,8 @@ export function normalizeLibraryFilters(value: unknown): LibraryFilterOptions {
 }
 
 /** Public discovery sends client metadata, never account credentials. */
-export function clientIdentityHeaders(identity: ClientIdentity = DEFAULT_CLIENT_IDENTITY): Record<string, string> {
-  return { 'X-Emby-Authorization': authHeader(identity), Accept: 'application/json' };
+export function clientIdentityHeaders(identity: ClientIdentity = DEFAULT_CLIENT_IDENTITY, protocol: ServerProtocol = 'jellyfin'): Record<string, string> {
+  return { 'X-Emby-Authorization': authHeader(identity, undefined, protocol), Accept: 'application/json' };
 }
 
 export class MediaServerApi {
@@ -226,6 +226,7 @@ export class MediaServerApi {
     public readonly protocol: ServerProtocol = 'jellyfin',
     private readonly identity: () => ClientIdentity = () => DEFAULT_CLIENT_IDENTITY,
     private readonly deviceIdOverride?: string,
+    private readonly authorizationOnly = false,
   ) {
     this.baseUrl = normalizeAddress(baseUrl);
   }
@@ -235,8 +236,8 @@ export class MediaServerApi {
     const authorization = authHeader(identity, this.token, this.protocol, this.userId, this.deviceId());
     return {
       Authorization: authorization,
-      'X-Emby-Authorization': authorization,
-      ...(this.token ? { 'X-Emby-Token': this.token } : {}),
+      ...(!this.authorizationOnly ? { 'X-Emby-Authorization': authorization,
+        ...(this.token ? { 'X-Emby-Token': this.token } : {}) } : {}),
       Accept: 'application/json',
       'Content-Type': 'application/json',
     };

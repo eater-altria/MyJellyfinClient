@@ -17,6 +17,7 @@ export interface SavedServer {
   token?: string;
   deviceId?: string; // Explicit per-connection registration; legacy connections keep the global ID.
   clientName?: string; // Optional per-connection client name, chosen when registering a new device.
+  authorizationOnly?: boolean; // Public probe verified a proxy that permits only the standard auth header.
   remoteServerId?: string;
   jellyfinServerId?: string; // Legacy saved connection field.
   version?: string;
@@ -33,8 +34,8 @@ interface ServersState {
   setReachability: (id: string, address: string, reachable: boolean) => void;
   /** live API instances keyed by saved server id */
   apis: Record<string, MediaServerApi>;
-  addServer: (address: string, username: string, password: string, name?: string, onDetected?: (protocol: ServerProtocol) => void) => Promise<SavedServer>;
-  updateServer: (id: string, options: { name: string; address: string; username: string; password?: string; onDetected?: (protocol: ServerProtocol) => void; registerNewDevice?: { clientName: string } }) => Promise<void>;
+  addServer: (address: string, username: string, password: string, name?: string, onDetected?: (protocol: ServerProtocol) => void, protocol?: ServerProtocol) => Promise<SavedServer>;
+  updateServer: (id: string, options: { name: string; address: string; username: string; password?: string; protocol?: ServerProtocol; onDetected?: (protocol: ServerProtocol) => void; registerNewDevice?: { clientName: string } }) => Promise<void>;
   removeServer: (id: string) => void;
   setActive: (id: string | null) => void;
   refreshServer: (id: string) => Promise<void>;
@@ -45,7 +46,7 @@ function makeApi(s: SavedServer): MediaServerApi {
   return new MediaServerApi(s.address, s.token, s.userId, s.protocol, () => {
     const identity = getClientIdentity(s.protocol ?? 'jellyfin');
     return s.clientName ? { ...identity, name: s.clientName } : identity;
-  }, s.deviceId);
+  }, s.deviceId, s.authorizationOnly);
 }
 
 const discoveryIdentities = () => ({ jellyfin: getClientIdentity('jellyfin'), emby: getClientIdentity('emby') });
@@ -63,16 +64,17 @@ export const useServers = create<ServersState>()(
         set((state) => ({ reachability: { ...state.reachability, [id]: { address, reachable } } }));
       },
 
-      async addServer(address, username, password, name, onDetected) {
-        const { address: base, protocol, info } = await detectServer(address, { clientIdentities: discoveryIdentities() });
+      async addServer(address, username, password, name, onDetected, selectedProtocol) {
+        const { address: base, protocol, info, authorizationOnly } = await detectServer(address, { clientIdentities: discoveryIdentities(), protocol: selectedProtocol });
         onDetected?.(protocol);
-        const api = new MediaServerApi(base, undefined, undefined, protocol, () => getClientIdentity(protocol));
+        const api = new MediaServerApi(base, undefined, undefined, protocol, () => getClientIdentity(protocol), undefined, authorizationOnly);
         const auth: AuthResult = await api.authenticate(username, password);
         const saved: SavedServer = {
           id: crypto.randomUUID(),
           name: name?.trim() || info.ServerName || base,
           address: base,
           protocol,
+          ...(authorizationOnly ? { authorizationOnly: true } : {}),
           userId: auth.userId,
           userName: auth.userName,
           token: auth.token,
@@ -104,19 +106,21 @@ export const useServers = create<ServersState>()(
         if (!original) throw new Error('服务器不存在');
         const address = normalizeAddress(options.address);
         let saved = { ...original, name: options.name.trim() || original.name, address };
-        if (address !== original.address || options.username !== original.userName || options.password !== undefined || options.registerNewDevice) {
+        if (address !== original.address || options.username !== original.userName || options.password !== undefined || options.registerNewDevice
+          || (options.protocol !== undefined && options.protocol !== (original.protocol ?? 'jellyfin'))) {
           const identities = discoveryIdentities();
           if (options.registerNewDevice) {
             identities.emby = { ...identities.emby, name: normalizeClientIdentityText(options.registerNewDevice.clientName) || identities.emby.name };
           }
-          const detected = await detectServer(address, { clientIdentities: identities });
+          const detected = await detectServer(address, { clientIdentities: identities, protocol: options.protocol });
           if (options.registerNewDevice && detected.protocol !== 'emby') throw new ServerRegistrationError('重新登记登录设备仅适用于 Emby 服务器');
           options.onDetected?.(detected.protocol);
           const registration = options.registerNewDevice && detected.protocol === 'emby' ? {
             deviceId: crypto.randomUUID(),
             clientName: normalizeClientIdentityText(options.registerNewDevice.clientName) || getClientIdentity(detected.protocol).name,
           } : {};
-          const loginServer = { ...saved, ...registration, address: detected.address, protocol: detected.protocol };
+          const loginServer = { ...saved, ...registration, address: detected.address, protocol: detected.protocol,
+            authorizationOnly: detected.authorizationOnly };
           const api = makeApi({ ...loginServer, token: undefined, userId: undefined });
           const info = detected.info;
           const auth = await api.authenticate(options.username, options.password ?? '');

@@ -132,7 +132,7 @@ const esbuild = require('esbuild');
       let edits=0,additions=0;
       useServers.setState({refreshServer:async()=>{refreshes++;useServers.setState(state=>({apis:{...state.apis}}));},
         updateServer:async(id,patch)=>{edits++;useServers.setState(state=>({servers:state.servers.map(server=>server.id===id?{...server,name:patch.name}:server)}));},
-        addServer:async(address,user,password,name)=>{additions++;useServers.setState(state=>({servers:[...state.servers,{id:'added',name,address,userName:user,protocol:'jellyfin'}]}));},
+        addServer:async(address,user,password,name,onDetected,protocol)=>{check(protocol==='emby','Add dialog must pass the selected Emby protocol');additions++;useServers.setState(state=>({servers:[...state.servers,{id:'added',name,address,userName:user,protocol}]}));},
       });
       useSettings.setState({showPreviewImage:false,showItemCountInTitle:true,sortFoldersSeparately:false});
       function Navigation(){navigate=useNavigate();return null;}
@@ -224,6 +224,9 @@ const esbuild = require('esbuild');
         setInput(nameInput,'Renamed Fixture');await wait();click(textButton('保存',document.querySelector('[role="dialog"]')));await wait();
         check(edits===1&&!document.querySelector('[role="dialog"]')&&slot().textContent.includes('Renamed Fixture'),'Editing and saving must reach the actual server form handler');
         click(textButton('添加'));await wait();const addDialog=document.querySelector('[role="dialog"]');
+        check(addDialog.querySelector('input[type="radio"][value="jellyfin"]').checked,'New connections default to Jellyfin');
+        click(addDialog.querySelector('input[type="radio"][value="emby"]'));await wait();
+        check(addDialog.querySelector('input[type="radio"][value="emby"]').checked,'Emby selection must update the actual dialog');
         const inputFor=label=>addDialog.querySelector('#'+CSS.escape([...addDialog.querySelectorAll('label')].find(node=>node.textContent===label).htmlFor));
         setInput(inputFor('服务器名称'),'Added Fixture');setInput(inputFor('服务器地址'),'https://added.fixture.test');setInput(inputFor('用户名'),'fixture-user');setInput(inputFor('密码'),'fixture-password');await wait();
         click(textButton('连接',addDialog));await wait();

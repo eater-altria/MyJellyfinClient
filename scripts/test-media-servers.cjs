@@ -16,6 +16,10 @@ const fixtures = {
   '/oldjf': {protocol:'jellyfin', info:{Id:'old-jf',Version:'10.10.7',ServerName:'Library'}},
   '/proxy/emby': {protocol:'emby', info:{Id:'emby-server',Version:'4.9.1.0',ServerName:'Jellyfin is just my chosen name'}},
   '/explicit': {protocol:'emby', info:{Id:'explicit-emby',Version:'5.0.0',ProductName:'Emby Server'}},
+  '/branded': {protocol:'emby', info:{Id:'branded-server',Version:'4.9.3.0',ProductName:'Fixture Media Server'}},
+  '/branded/emby': {protocol:'emby', info:{Id:'branded-server',Version:'4.9.3.0',ProductName:'Fixture Media Server'}},
+  '/manual/emby': {protocol:'emby', info:{Id:'manual-emby',Version:'99.0.0',ProductName:'Jellyfin Server'}},
+  '/manual-jf': {protocol:'jellyfin', info:{Id:'manual-jf',Version:'4.0.0',ProductName:'Emby Server'}},
   '/fallback/emby': {protocol:'emby', info:{Id:'fallback',Version:'4.8.0.0'}},
   '/client-jf': {protocol:'jellyfin', client:'Jellyfin Web', info:{Id:'client-jf',Version:'12.0.0',ProductName:'Jellyfin Server'}},
   '/client-emby': {protocol:'emby', client:'Emby Theater', info:{Id:'client-emby',Version:'4.9.1.0',ProductName:'Emby Server'}},
@@ -80,6 +84,14 @@ const server = http.createServer(async (req,res) => {
   const jf=await detectServer(origin+'/jf');assert.equal(jf.protocol,'jellyfin');
   assert.equal((await detectServer(origin+'/oldjf')).protocol,'jellyfin');
   assert.equal((await detectServer(origin+'/explicit')).protocol,'emby');
+  const branded=await detectServer(origin+'/branded');
+  assert.equal(branded.protocol,'emby','Custom branding must not hide the Emby version family');
+  assert.equal(branded.address,origin+'/branded/emby','Branded servers must still validate the preferred API prefix');
+  const brandedApi=new MediaServerApi(branded.address,undefined,undefined,branded.protocol);
+  const brandedLogin=await brandedApi.authenticate('tester','test-password');
+  assert.equal(brandedLogin.token,'emby-token');
+  assert.equal(calls.at(-1).headers.authorization,calls.at(-1).headers['x-emby-authorization']);
+  assert(calls.at(-1).headers.authorization.startsWith('Emby '));
   const emby=await detectServer(origin+'/proxy');assert.equal(emby.protocol,'emby');assert.equal(emby.address,origin+'/proxy/emby');
   assert.equal((await detectServer(origin+'/fallback')).address,origin+'/fallback/emby');
   assert.equal((await detectServer(origin+'/proxy/emby/web/index.html')).address,emby.address);
@@ -179,6 +191,21 @@ const server = http.createServer(async (req,res) => {
   assert.equal(useServers.getState().getApi(savedJf.id).protocol,'jellyfin');assert.equal(useServers.getState().getApi(savedEmby.id).protocol,'emby');
   const persisted=JSON.parse(storage.get('mjc:servers'));assert.equal(persisted.state.servers[1].protocol,'emby');
   assert.equal(persisted.state.servers[1].token,'emby-token','Persist the login response token for this server');
+  const manualEmby=await state.addServer(origin+'/manual','tester','test-password','Manual Emby',undefined,'emby');
+  assert.equal(manualEmby.protocol,'emby');assert.equal(manualEmby.address,origin+'/manual/emby');
+  const manualJf=await state.addServer(origin+'/manual-jf','tester','test-password','Manual Jellyfin',undefined,'jellyfin');
+  assert.equal(manualJf.protocol,'jellyfin');assert.equal(manualJf.token,'jellyfin-token');
+  const manualProbe=calls.find(c=>c.path==='/manual/emby/System/Info/Public');
+  assert(manualProbe.headers['x-emby-authorization'].startsWith('Emby '));
+  const manualBefore=calls.length;
+  await state.updateServer(manualEmby.id,{name:'Manual renamed',address:manualEmby.address,username:'tester',protocol:'emby'});
+  assert.equal(calls.length,manualBefore,'Unchanged manually selected protocol preserves login');
+  await assert.rejects(state.updateServer(manualEmby.id,{name:'Wrong type',address:manualEmby.address,username:'tester',password:'test-password',protocol:'jellyfin'}),ApiError);
+  assert.equal(useServers.getState().servers.find(s=>s.id===manualEmby.id).protocol,'emby','Failed protocol change must preserve connection');
+  await state.updateServer(manualJf.id,{name:'Manual changed',address:origin+'/manual',username:'tester',password:'test-password',protocol:'emby'});
+  assert.equal(useServers.getState().getApi(manualJf.id).protocol,'emby');
+  assert.equal(JSON.parse(storage.get('mjc:servers')).state.servers.find(s=>s.id===manualJf.id).protocol,'emby');
+  console.log('PASS: manual types override product/version, select protocol headers, persist, preserve login and roll back failed changes');
   const before=calls.length;await state.updateServer(savedEmby.id,{name:'Renamed',address:savedEmby.address,username:'tester'});assert.equal(calls.length,before,'Rename must preserve login without a new probe');
   await assert.rejects(state.updateServer(savedJf.id,{name:'Bad',address:origin+'/proxy',username:'tester',password:'wrong-password'}),ApiError);
   assert.equal(useServers.getState().servers.find(s=>s.id===savedJf.id).protocol,'jellyfin','Failed login must preserve the previous connection');

@@ -12,11 +12,38 @@ const browser = [process.env.MJC_TEST_CHROMIUM, 'C:/Program Files/Google/Chrome/
 assert(browser, 'Set MJC_TEST_CHROMIUM to a trusted Chromium browser');
 const userAgent = `${identity.name}/${identity.version} (Windows NT 10.0.12345; x64)`;
 const calls = [];
+const restrictedCalls = [];
+const preflights = [];
 let child;
 const server = http.createServer(async (request, response) => {
   if (request.url === '/') {
     response.writeHead(200, {'Content-Type': 'text/html'});
     response.end(page); return;
+  }
+  if (request.url.startsWith('/restricted')) {
+    const origin = request.headers.origin;
+    response.setHeader('Access-Control-Allow-Origin', origin || '*');
+    response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    if (request.method === 'OPTIONS') {
+      preflights.push(request.headers['access-control-request-headers']);
+      response.writeHead(204); response.end(); return;
+    }
+    restrictedCalls.push({path:request.url,headers:request.headers});
+    if (request.headers['x-emby-authorization'] || request.headers['x-emby-token']) {
+      response.writeHead(400); response.end(); return;
+    }
+    let body;
+    if (request.method === 'POST') {
+      let raw='';for await (const chunk of request) raw+=chunk;body=JSON.parse(raw);
+    }
+    response.writeHead(200, {'Content-Type':'application/json'});
+    if (request.url.endsWith('/System/Info/Public')) response.end(JSON.stringify({Id:'restricted',Version:'4.9.3.0',ProductName:'Fixture Media Server'}));
+    else if (request.url.endsWith('/Users/AuthenticateByName')) {
+      assert.deepEqual(body,{Username:'tester',Pw:'fixture-password'});
+      response.end(JSON.stringify({User:{Id:'fixture-user',Name:'tester'},AccessToken:'restricted-token',ServerId:'restricted'}));
+    } else response.end(JSON.stringify({Items:[],TotalRecordCount:0}));
+    return;
   }
   if (request.url === '/emby/Users/AuthenticateByName') {
     let body = ''; for await (const chunk of request) body += chunk;
@@ -29,12 +56,18 @@ const server = http.createServer(async (request, response) => {
 });
 const bundle = esbuild.buildSync({stdin: {resolveDir: process.cwd(), loader: 'ts', contents: `
   import {MediaServerApi} from './src/api/mediaServer';
+  import {useServers} from './src/store/servers';
   const result = document.getElementById('result');
   (async () => {
     const address = location.origin + '/emby';
     await new MediaServerApi(address, undefined, undefined, 'emby').authenticate('tester', 'fixture-password');
     await new MediaServerApi(address, undefined, undefined, 'emby', () => ({name: 'Manual Fixture App', version: '9.9.9', deviceName: 'Fixture Desktop'}))
       .authenticate('tester', 'fixture-password');
+    const crossOrigin = location.origin.replace('127.0.0.1','localhost') + '/restricted';
+    const saved = await useServers.getState().addServer(crossOrigin,'tester','fixture-password','Restricted fixture',undefined,'emby');
+    if (!saved.authorizationOnly || saved.protocol !== 'emby') throw Error('CORS compatibility must be saved');
+    useServers.setState({apis:{}});
+    await useServers.getState().getApi(saved.id).getUserViews();
     result.dataset.status = 'pass'; result.textContent = 'completed';
   })().catch(error => { result.dataset.status = 'fail'; result.textContent = error.name; });
 `}, bundle: true, write: false, format: 'iife'}).outputFiles[0].text;
@@ -68,7 +101,15 @@ const field = (header, key) => decodeURIComponent(header.match(new RegExp(`${key
   assert.equal(field(calls[1].headers.authorization, 'Version'), '9.9.9');
   assert.equal(field(calls[1].headers.authorization, 'Device'), 'Fixture Desktop');
   assert.equal(field(calls[0].headers.authorization, 'DeviceId'), field(calls[1].headers.authorization, 'DeviceId'));
+  assert(preflights.some(headers=>headers?.includes('x-emby-authorization')),'Real CORS must reject the original discovery header');
+  const restrictedLogin=restrictedCalls.filter(call=>call.path.endsWith('/Users/AuthenticateByName'));
+  assert.equal(restrictedLogin.length,1,'Login must not be replayed');
+  assert(restrictedLogin[0].headers.authorization.startsWith('Emby '));
+  assert(restrictedCalls.filter(call=>call.path.endsWith('/System/Info/Public')).every(call=>!call.headers.authorization.includes('Token=')&&!call.headers.authorization.includes('UserId=')),'Public fallback must contain no account credentials');
+  assert(restrictedCalls.filter(call=>call.path.endsWith('/Views')).every(call=>call.headers.authorization.includes('Token="restricted-token"')));
+  assert(restrictedCalls.every(call=>!call.headers['x-emby-authorization']&&!call.headers['x-emby-token']));
   console.log('PASS: real Chromium login HTTP UA, shared first-login defaults, manual identity overrides and stable device ID');
+  console.log('PASS: real cross-origin preflight rejection, credential-free fallback, single login, token authentication and rebuilt API persistence');
 })().catch(error => {console.error(error); process.exitCode = 1;}).finally(() => {
   child?.kill(); server.closeAllConnections(); server.close();
   const resolved = path.resolve(directory);

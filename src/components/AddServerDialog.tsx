@@ -27,6 +27,7 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
   const [address, setAddress] = useState(server?.address ?? '');
   const [username, setUsername] = useState(server?.userName ?? '');
   const [password, setPassword] = useState('');
+  const [protocol, setProtocol] = useState<ServerProtocol>(server?.protocol ?? 'jellyfin');
   const [registerNewDevice, setRegisterNewDevice] = useState(false);
   const [clientName, setClientName] = useState(server?.clientName ?? getClientIdentity('emby').name);
   const [loading, setLoading] = useState(false);
@@ -71,13 +72,13 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
     if (!canSubmit) return;
     setLoading(true);
     setError('');
-    setConnectionStatus('正在自动识别服务器…');
-    const onDetected = (protocol: ServerProtocol) => setConnectionStatus(`已识别 ${serverProtocolName(protocol)}，正在登录…`);
+    setConnectionStatus(`正在连接 ${serverProtocolName(protocol)}…`);
+    const onDetected = () => setConnectionStatus(`正在登录 ${serverProtocolName(protocol)}…`);
     try {
       if (server) await updateServer(server.id, { name, address: address.trim(), username: username.trim(),
-        password: registerNewDevice ? password : password || undefined, onDetected,
-        registerNewDevice: registerNewDevice ? { clientName } : undefined });
-      else await addServer(address.trim(), username.trim(), password, name, onDetected);
+        password: registerNewDevice && protocol === 'emby' ? password : password || undefined, protocol, onDetected,
+        registerNewDevice: registerNewDevice && protocol === 'emby' ? { clientName } : undefined });
+      else await addServer(address.trim(), username.trim(), password, name, onDetected, protocol);
       onClose();
     } catch (e) {
       setError(errorMessage(e));
@@ -105,7 +106,7 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
         <div className="max-h-[calc(100dvh-32px)] overflow-y-auto p-7">
         <div className="mb-6 flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            {server?.protocol === 'emby' ? <IconEmby size={36} /> : <IconJellyfin size={36} />}
+            {protocol === 'emby' ? <IconEmby size={36} /> : <IconJellyfin size={36} />}
             <div className="min-w-0">
               <h2 id={`${formId}-title`} className="text-[20px] font-semibold tracking-tight text-text-primary">{server ? '编辑服务器' : '添加服务器'}</h2>
               <p className="mt-1 text-[12px] text-text-secondary">连接你的 Jellyfin 或 Emby 媒体库</p>
@@ -132,6 +133,17 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
             <label htmlFor={`${formId}-name`} className="mb-1.5 block px-1 text-[12px] font-medium text-text-secondary">服务器名称</label>
             <input id={`${formId}-name`} className={inputCls} placeholder="自定义显示名称（可留空）" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
           </div>
+          <fieldset disabled={loading}>
+            <legend className="mb-1.5 px-1 text-[12px] font-medium text-text-secondary">服务器类型</legend>
+            <div className="flex gap-3">
+              {(['jellyfin', 'emby'] as const).map(value => (
+                <label key={value} className="glass-input flex flex-1 cursor-pointer items-center gap-2 rounded-2xl px-4 py-3 text-[13px] text-text-primary">
+                  <input type="radio" name={`${formId}-protocol`} value={value} checked={protocol === value} onChange={() => setProtocol(value)} />
+                  {serverProtocolName(value)}
+                </label>
+              ))}
+            </div>
+          </fieldset>
           <div>
             <label htmlFor={`${formId}-address`} className="mb-1.5 block px-1 text-[12px] font-medium text-text-secondary">服务器地址</label>
             <input
@@ -160,13 +172,13 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
               autoComplete="current-password"
               className={inputCls}
               type="password"
-              placeholder={registerNewDevice ? '重新登录的密码；无密码账号可留空' : server ? '留空保留登录；更换地址或用户需重新认证' : '密码（可留空）'}
+              placeholder={registerNewDevice && protocol === 'emby' ? '重新登录的密码；无密码账号可留空' : server ? '留空保留登录；更换类型、地址或用户需重新认证' : '密码（可留空）'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
           </div>
 
-          {server?.protocol === 'emby' && (
+          {server && protocol === 'emby' && (
             <div className="rounded-2xl bg-white/30 p-3">
               <label className="flex items-center gap-2 text-[12px] font-medium text-text-primary">
                 <input type="checkbox" disabled={loading} checked={registerNewDevice} onChange={e => setRegisterNewDevice(e.target.checked)} />
@@ -185,7 +197,7 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
             </div>
           )}
 
-          <p className="px-1 text-[12px] leading-relaxed text-text-secondary" role="status">{loading ? connectionStatus : '自动识别 Jellyfin / Emby，无需选择服务器类型'}</p>
+          <p className="px-1 text-[12px] leading-relaxed text-text-secondary" role="status">{loading ? connectionStatus : '按所选类型连接，不受服务器返回的产品名称影响。'}</p>
 
           {error && (
             <div role="alert" className="rounded-2xl bg-red-500/10 px-4 py-3 text-[12px] text-red-600">{error}</div>
