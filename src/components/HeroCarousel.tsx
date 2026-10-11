@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MediaServerApi, BaseItem } from '../api/mediaServer';
-import { IconChevronLeft, IconChevronRight, IconSearch } from './icons';
+import { IconChevronLeft, IconChevronRight, IconRefresh, IconSearch } from './icons';
 import LiquidGlass from './LiquidGlass';
 
 /** Full-width cross-fading hero carousel fed by items with backdrops. */
@@ -10,12 +10,16 @@ export default function HeroCarousel({
   items,
   serverId,
   onCurrentItemChange,
+  onRefresh,
+  refreshing = false,
   active = true,
 }: {
   api: MediaServerApi;
   items: BaseItem[];
   serverId: string;
   onCurrentItemChange?: (item: BaseItem | null) => void;
+  onRefresh?: () => void;
+  refreshing?: boolean;
   active?: boolean;
 }) {
   const navigate = useNavigate();
@@ -93,7 +97,7 @@ export default function HeroCarousel({
       {/* Bottom gradient overlay */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/50 via-black/10 to-transparent" />
 
-      {/* Search and carousel navigation share the same floating controls. */}
+      {/* Home actions and carousel navigation share the same floating controls. */}
       <div className="absolute right-5 top-5 z-20 flex items-center gap-2">
         <button type="button"
           onClick={event => {
@@ -104,6 +108,17 @@ export default function HeroCarousel({
           className="glass-icon-button glass-dark h-10 w-10 text-white">
           <IconSearch size={18} />
         </button>
+        {onRefresh && <button type="button"
+          onClick={event => {
+            event.stopPropagation();
+            if (!refreshing) onRefresh();
+          }}
+          disabled={refreshing}
+          aria-label="刷新当前服务器列表" title={refreshing ? '正在刷新…' : '刷新'}
+          aria-busy={refreshing}
+          className="glass-icon-button glass-dark h-10 w-10 text-white disabled:cursor-pointer disabled:opacity-100">
+          <IconRefresh size={18} className={refreshing ? 'motion-safe:animate-spin' : undefined} />
+        </button>}
         {count > 1 && <>
           <button
             onClick={(e) => {

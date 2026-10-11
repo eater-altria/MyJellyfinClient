@@ -101,10 +101,19 @@ const esbuild = require('esbuild');
       let navigate, searches=0, views=0, delayed=null, failMore=false, failFacets=false;
       const queries=[];
       const nativeSignals=[];
+      const artwork=color=>'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="440" height="240"><path fill="'+color+'" d="M0 0h440v240H0z"/></svg>');
+      const libraryCover=artwork('#384e93'),memberPoster=artwork('#c18542');
+      const brokenCover='data:image/png;base64,bm90LWEtdmFsaWQtcG5n';
+      let replacementCover=brokenCover;
+      let homeDelay=null, homeItemsDelay=null, homeRevision=0;
+      const homeRequests=[];
+      const homeViews=()=>Array.from({length:6},(_,i)=>({Id:'view-'+i,Name:'分类 '+i,CollectionType:'movies'}));
       const movies=Array.from({length:310}, (_,i)=>({Id:'movie-'+i, Name:'Movie '+String(i).padStart(3,'0'),Type:'Movie',
         ProductionYear:i%2?2024:2025,Genres:[i%2?'剧情':'动画'],Tags:[i%2?'标签 A':'标签 B'],UserData:{IsFavorite:i%3===0}}));
       const api={userId:'user-a',protocol:'jellyfin',token:'fixture-only',baseUrl:'https://fixture.test',clientIdentity:()=>({name:'Fixture',version:'1.0',deviceName:'Fixture PC'}),
-        posterUrl:()=>null,backdropUrl:()=>null,logoUrl:()=>null,personImageUrl:()=>null,
+        posterUrl:item=>item.Id==='view-0'?libraryCover:item.Id==='view-2'?replacementCover:item.Type==='Movie'?memberPoster:null,
+        thumbUrl:item=>item.Type==='Movie'?libraryCover:null,
+        backdropUrl:item=>item.Type==='Movie'?libraryCover:null,logoUrl:()=>null,personImageUrl:()=>null,
         getItem:async(id,signal)=>{if(id==='movie-1'&&signal)nativeSignals.push(signal);return id==='movies'||id==='other'?{Id:id,Name:'反馈测试媒体库',Type:'CollectionFolder',CollectionType:'movies'}
           : movies.find(item=>item.Id===id)??{Id:id,Name:id,Type:'Series'};},
         getPlaybackInfo:async()=>({MediaSources:[{Id:'fixture-source',Container:'mp4',SupportsDirectPlay:true}]}),
@@ -113,9 +122,15 @@ const esbuild = require('esbuild');
         getSimilar:async()=>({Items:[],TotalRecordCount:0}), getSeasons:async()=>({Items:[],TotalRecordCount:0}),
         getEpisodes:async()=>({Items:[],TotalRecordCount:0}), getPlayedItems:async()=>({Items:movies.slice(0,60),TotalRecordCount:60}),
         search:async()=>{searches++;return {Items:movies.slice(0,80),TotalRecordCount:80};},
-        getUserViews:async()=>{views++;return {Items:Array.from({length:6},(_,i)=>({Id:'view-'+i,Name:'分类 '+i,CollectionType:'movies'}))};},
-        getLibraryItems:async(view,start,limit,signal)=>({Items:movies.slice(start,start+limit),TotalRecordCount:310}),
-        getResumeItems:async()=>({Items:[],TotalRecordCount:0}),getNextUp:async()=>({Items:[],TotalRecordCount:0}),
+        getUserViews:async signal=>{views++;homeRequests.push({kind:'views',signal});return homeDelay?homeDelay.promise:{Items:homeViews()};},
+        getLibraryItems:async(view,start,limit,signal)=>{
+          homeRequests.push({kind:'items',id:view.Id,start,signal});
+          if(homeItemsDelay&&view.Id==='view-2')await homeItemsDelay.promise;
+          const list=movies.slice(start,start+limit);
+          if(homeRevision&&view.Id==='view-0'&&start===0)list[0]={...list[0],Id:'fresh-item',Name:'Fresh fixture item'};
+          return {Items:list,TotalRecordCount:310};
+        },
+        getResumeItems:async()=>{if(homeItemsDelay)await homeItemsDelay.promise;return {Items:movies.slice(0,3),TotalRecordCount:3};},getNextUp:async()=>({Items:[],TotalRecordCount:0}),
         getLibraryFilters:async(parent,type,signal)=>{if(failFacets)throw Error('fixture');return {genres:['动画','剧情'],tags:['标签 A','标签 B'],years:[2025,2024]};},
         queryItems(params,signal){
           queries.push({...params,signal});
@@ -173,10 +188,78 @@ const esbuild = require('esbuild');
         await go('/search?serverId=fixture&q=Movie');await wait(500);const searchPage=page();await scroll(searchPage,900);const searchTop=searchPage.scrollTop;
         click(searchPage.querySelector('button[title="Movie 030"]'));await wait();await back();
         check(page()===searchPage&&searches===1&&Math.abs(searchPage.scrollTop-searchTop)<2,'Search query/results/position must survive detail Back');
-        await go('/server/fixture');const homePage=page();await scroll(homePage,450);const homeTop=homePage.scrollTop;
+        await go('/server/fixture');const homePage=page();
+        const mediaRow=homePage.querySelector('[aria-label="我的媒体列表"]');
+        const cards=()=>[...mediaRow.querySelectorAll('button.media-card')];
+        const originalLabels=cards().map(card=>card.textContent);
+        check(cards().every(card=>!card.querySelector('img')),'Disabled previews must also suppress library artwork');
+        flushSync(()=>useSettings.setState({showPreviewImage:true}));await wait();
+        const coverImage=cards()[0].querySelector('img');
+        check(coverImage?.src===libraryCover&&coverImage.complete&&coverImage.naturalWidth>0,'Home must load the server library cover');
+        check(cards()[0].querySelectorAll('img').length===1,'A library cover must replace the member-poster fan');
+        check(cards()[0].textContent.trim()===''&&cards()[0].children.length===1&&cards()[0].getAttribute('aria-label')==='分类 0','Cover cards must show only artwork while retaining an accessible name');
+        check(cards()[1].querySelectorAll('img').length===4&&cards()[1].querySelector('img').src===memberPoster,'Missing library artwork must retain the original four-poster fan');
+        check(cards()[1].textContent===originalLabels[1],'Missing covers must retain the original text description');
+        await scroll(mediaRow,0,400);await wait();
+        check(cards()[2].querySelectorAll('img').length===4&&cards()[2].querySelector('img').src===memberPoster,'Failed server cover must fall back to member posters');
+        check(cards()[2].textContent===originalLabels[2],'A failed cover must restore the complete original text description');
+        flushSync(()=>useSettings.setState({thumbnailFill:false}));await wait();
+        check(getComputedStyle(cards()[0].querySelector('img')).objectFit==='contain'&&getComputedStyle(cards()[1].querySelector('img')).objectFit==='contain','Cover and fallback must both respect contain');
+        replacementCover=artwork('#63894d');
+        flushSync(()=>useSettings.setState({thumbnailFill:true}));await wait();
+        check(cards()[2].querySelectorAll('img').length===1&&cards()[2].querySelector('img').src===replacementCover,'Updated cover URL must retry after an image failure');
+        check(cards()[2].textContent.trim()===''&&cards()[2].children.length===1,'A restored cover must remove all text and its overlay again');
+        check(getComputedStyle(cards()[0].querySelector('img')).objectFit==='cover','Library cover must respect fill');
+        check(cards()[4].textContent.includes('分类 4')&&cards().every(card=>Math.abs(card.getBoundingClientRect().width-220)<1&&Math.abs(card.getBoundingClientRect().height-120)<1),'Artwork must preserve names and card dimensions at every window size/DPI');
+        flushSync(()=>useSettings.setState({showPreviewImage:false}));await wait();
+        check(cards().every(card=>!card.querySelector('img')),'Turning previews off must remove both cover and fallback images');
+        check(cards().every((card,index)=>card.textContent===originalLabels[index]),'Turning previews off must restore all original text descriptions');
+        replacementCover=brokenCover;
+        flushSync(()=>useSettings.setState({showPreviewImage:true}));await wait();
+        check(cards()[2].querySelectorAll('img').length===4,'A second failed cover must fall back again');
+        // Toggling previews must permit the same previously failed URL to be mounted again.
+        flushSync(()=>useSettings.setState({showPreviewImage:false}));await wait();
+        flushSync(()=>useSettings.setState({showPreviewImage:true}));
+        check(cards()[2].querySelector('img')?.src===brokenCover,'Re-enabling previews must retry a previously failed URL');
+        await wait();check(cards()[2].querySelectorAll('img').length===4,'Retried broken artwork must still fall back');
+        flushSync(()=>useSettings.setState({thumbnailFill:false}));await wait();await scroll(homePage,0);
+        const refreshButton=()=>homePage.querySelector('[aria-label="刷新当前服务器列表"]');
+        const refresh=refreshButton(),search=homePage.querySelector('[aria-label="搜索当前服务器媒体库"]'),previous=homePage.querySelector('[aria-label="上一张预览"]');
+        check(refresh&&search&&previous,'Carousel must expose refresh between search and navigation');
+        const bounds=node=>node.getBoundingClientRect();
+        check(bounds(search).right<bounds(refresh).left&&bounds(refresh).right<bounds(previous).left&&bounds(refresh).right<=innerWidth,'Refresh must fit between search and arrows at every window size/DPI');
+        let releaseRefresh;
+        homeDelay={promise:new Promise(resolve=>releaseRefresh=resolve)};
+        const beforeViews=views, beforeItems=homeRequests.filter(request=>request.kind==='items').length;
+        click(refresh);await wait();click(refresh);await wait();
+        check(refreshButton()===refresh&&refresh.disabled&&refresh.getAttribute('aria-busy')==='true'&&views===beforeViews+1,'Refresh must retain its controls, expose busy state and prevent duplicate requests');
+        check(getComputedStyle(refresh).cursor==='pointer','Busy refresh must keep the normal pointer instead of an hourglass');
+        check(getComputedStyle(refresh.querySelector('svg')).animationName==='spin','Busy refresh must rotate only its icon');
+        check(homePage.querySelector('[aria-label="最新分类 0列表"] button[title="Movie 000"]'),'Refresh must keep the old list visible while waiting');
+        let releaseItems;
+        homeItemsDelay={promise:new Promise(resolve=>releaseItems=resolve)};
+        homeRevision=1;homeDelay=null;releaseRefresh({Items:homeViews()});await wait(140);
+        check(refreshButton().disabled,'Refresh must stay busy while individual lists are still pending');
+        const refreshingResume=homePage.querySelector('[aria-label="继续观看列表"]'),refreshingCategory=homePage.querySelector('[aria-label="最新分类 2列表"]');
+        check(refreshingResume.querySelectorAll('button[title^="Movie "]').length===3&&refreshingCategory.querySelector('button[title="Movie 000"]'),'Pending refresh must retain resume and category cards');
+        check(!refreshingResume.querySelector('[role="status"]')&&!refreshingCategory.querySelector('[role="status"]')&&!homePage.textContent.includes('加载中…'),'Refreshing lists must not append loading cards');
+        homeItemsDelay=null;releaseItems();await wait(140);
+        check(!refreshButton().disabled&&homePage.querySelector('[aria-label="最新分类 0列表"] button[title="Fresh fixture item"]'),'Refresh must replace list contents and re-enable its button');
+        check(getComputedStyle(refreshButton().querySelector('svg')).animationName==='none','The refresh icon must stop rotating when all lists finish');
+        const freshRequests=homeRequests.filter(request=>request.kind==='items').slice(beforeItems);
+        check(new Set(freshRequests.filter(request=>request.start===0).map(request=>request.id)).size===6,'Refresh must reload all six categories from their first page');
+        let releaseCancelled;
+        homeDelay={promise:new Promise(resolve=>releaseCancelled=resolve)};
+        click(refreshButton());await wait();const cancelledRefresh=homeRequests.at(-1);
+        await go('/files');check(cancelledRefresh.signal.aborted,'Leaving home must cancel refresh');
+        homeDelay=null;releaseCancelled({Items:[{Id:'stale-view',Name:'Stale view',CollectionType:'movies'}]});await wait();await back();
+        check(!homePage.textContent.includes('Stale view')&&!refreshButton().disabled,'Cancelled refresh must ignore late views and finish after returning');
+        flushSync(()=>useSettings.setState({showPreviewImage:false}));await wait();await scroll(mediaRow,0,0);
+        const retainedViewCalls=views;
+        await scroll(homePage,450);const homeTop=homePage.scrollTop;
         const row=homePage.querySelector('[aria-label="最新分类 2列表"]');await scroll(row,0,800);const rowLeft=row.scrollLeft;
         click(row.querySelector('button[title="Movie 005"]'));await wait();await back();
-        check(page()===homePage&&views<=2&&Math.abs(homePage.scrollTop-homeTop)<2,'Home Back must preserve page/position and not refetch views');
+        check(page()===homePage&&views===retainedViewCalls&&Math.abs(homePage.scrollTop-homeTop)<2,'Home Back must preserve page/position and not refetch views');
         check(Math.abs(row.scrollLeft-rowLeft)<2,'Home horizontal row must preserve position');
         await go('/server/fixture/library/movies');await scroll(page(),0);
         click(textButton('类型与风格'));await wait();click(textButton('动画'));await wait();

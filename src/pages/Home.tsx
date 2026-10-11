@@ -63,9 +63,12 @@ function ServerHome({ serverId }: { serverId: string }) {
 
   const [loading, setLoading] = useState(true);
   const [views, setViews] = useState<BaseItem[]>([]);
+  const [failedLibraryCovers, setFailedLibraryCovers] = useState<Record<string, string>>({});
   const [itemsByView, setItemsByView] = useState<Record<string, ViewItems>>({});
   const [viewsError, setViewsError] = useState(false);
   const [retry, setRetry] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshBusy = useRef(false);
   const generation = useRef(0);
   const requests = useRef(new Map<string, AbortController>());
   const backdropOwner = useRef({});
@@ -74,6 +77,18 @@ function ServerHome({ serverId }: { serverId: string }) {
   const initialized = useRef(-1);
   const rowsRef = useRef(itemsByView); rowsRef.current = itemsByView;
   const viewsRef = useRef(views); viewsRef.current = views;
+
+  const refreshLists = useCallback(() => {
+    if (!active || loading || refreshBusy.current) return;
+    refreshBusy.current = true;
+    setRefreshing(true);
+    setFailedLibraryCovers({});
+    setRetry(value => value + 1);
+  }, [active, loading]);
+
+  useEffect(() => {
+    if (!settings.showPreviewImage) setFailedLibraryCovers({});
+  }, [settings.showPreviewImage]);
 
   const loadView = useCallback(async (view: BaseItem, offset = 0) => {
     if (!api || !active || requests.current.has(view.Id)) return;
@@ -142,14 +157,26 @@ function ServerHome({ serverId }: { serverId: string }) {
     generation.current++;
     const controller = new AbortController();
     const resumed = initialized.current === retry;
-    if (!resumed) { setLoading(true); setViewsError(false); setViews([]); setItemsByView({}); }
+    if (!resumed) {
+      setViewsError(false);
+      // A manual refresh keeps the current cards visible until replacements arrive.
+      if (initialized.current < 0) { setLoading(true); setViews([]); setItemsByView({}); }
+    }
+    const finishRefresh = () => {
+      if (!mounted) return;
+      refreshBusy.current = false;
+      setRefreshing(false);
+    };
 
     (async () => {
       if (resumed) {
+        const jobs: Promise<void>[] = [];
         for (const view of [...viewsRef.current, RESUME_VIEW, NEXT_VIEW]) {
           const row = rowsRef.current[view.Id];
-          if (!row || row.loading) void loadView(view, row?.offset ?? 0);
+          if (!row || row.loading) jobs.push(loadView(view, row?.offset ?? 0));
         }
+        await Promise.allSettled(jobs);
+        finishRefresh();
         return;
       }
       let viewList: BaseItem[] = [];
@@ -161,6 +188,10 @@ function ServerHome({ serverId }: { serverId: string }) {
       }
       if (!mounted) return;
       setViews(viewList);
+      setItemsByView(previous => Object.fromEntries(
+        [...viewList, RESUME_VIEW, NEXT_VIEW].filter(view => previous[view.Id])
+          .map(view => [view.Id, previous[view.Id]]),
+      ));
       setLoading(false);
       initialized.current = retry;
 
@@ -172,6 +203,7 @@ function ServerHome({ serverId }: { serverId: string }) {
       jobs.push(loadView(RESUME_VIEW), loadView(NEXT_VIEW));
 
       await Promise.allSettled(jobs);
+      finishRefresh();
     })();
 
     return () => {
@@ -217,7 +249,7 @@ function ServerHome({ serverId }: { serverId: string }) {
   };
 
   const rowStatus = (view: BaseItem, row?: ViewItems) => <>
-    {(!row || row.loading) && <div className="glass-surface flex min-h-40 min-w-44 items-center justify-center rounded-[24px] text-sm text-text-secondary" role="status">加载中…</div>}
+    {!refreshing && (!row || row.loading) && <div className="glass-surface flex min-h-40 min-w-44 items-center justify-center rounded-[24px] text-sm text-text-secondary" role="status">加载中…</div>}
     {row?.error && <div className="glass-surface flex min-h-40 min-w-52 flex-col items-center justify-center gap-3 rounded-[24px] px-4 text-sm text-text-secondary">
       <span>此列表暂时加载失败</span>
       <button onClick={() => { void loadView(view, row.offset); }} className="glass-button-primary px-4 py-1.5">重试</button>
@@ -241,7 +273,7 @@ function ServerHome({ serverId }: { serverId: string }) {
       ) : (
         <>
           {settings.showPreviewImage && <div>
-            <HeroCarousel api={api} items={heroItems} serverId={serverId} onCurrentItemChange={handleHeroChange} active={active} />
+            <HeroCarousel api={api} items={heroItems} serverId={serverId} onCurrentItemChange={handleHeroChange} onRefresh={refreshLists} refreshing={refreshing} active={active} />
           </div>}
 
           {(views.length > 0 || !!resumeRow?.items.length || !!resumeRow?.error || !!nextRow?.items.length || !!nextRow?.error) && (
@@ -255,38 +287,52 @@ function ServerHome({ serverId }: { serverId: string }) {
             <SectionRow title="我的媒体" count={views.length}>
               {views.map((view, i) => {
                 const thumbs = settings.showPreviewImage ? (itemsByView[view.Id]?.items ?? []).slice(0, 4) : [];
+                const coverUrl = settings.showPreviewImage ? api.posterUrl(view, 440) : null;
+                const showCover = coverUrl && failedLibraryCovers[view.Id] !== coverUrl;
                 const gradient = PASTEL_GRADIENTS[i % PASTEL_GRADIENTS.length];
                 const folderDate = settings.showFolderTime ? mediaFolderDate(view) : '';
                 const childCount = view.ChildCount ?? view.RecursiveItemCount;
                 return (
                   <button
                     key={view.Id}
+                    aria-label={showCover ? view.Name : undefined}
                     onClick={() => navigate(`/server/${serverId}/library/${view.Id}`)}
                     className={`media-card relative h-[120px] w-[220px] shrink-0 overflow-hidden rounded-[24px] bg-gradient-to-br ${gradient} text-left shadow-card ring-1 ring-white/80`}
                   >
-                    {/* Fan stack of posters on the right */}
-                    <div className="absolute inset-y-0 right-0 w-24">
-                      {thumbs.map((t, ti) => {
-                        const url = api.posterUrl(t, 200);
-                        if (!url) return null;
-                        const rotations = [-14, -5, 5, 14];
-                        return (
-                          <img
-                            key={t.Id}
-                            src={url}
-                            alt=""
-                            draggable={false}
-                            className={`absolute top-1/2 h-[96px] w-[66px] rounded-xl shadow-md ring-1 ring-white/50 ${settings.thumbnailFill ? 'object-cover' : 'object-contain'}`}
-                            style={{
-                              right: 6 + ti * 12,
-                              transform: `translateY(-50%) rotate(${rotations[ti % rotations.length]}deg)`,
-                              zIndex: ti,
-                            }}
-                          />
-                        );
-                      })}
-                    </div>
-                    <div className="relative z-10 flex h-full max-w-[75%] flex-col justify-end bg-gradient-to-r from-white/75 via-white/40 to-transparent p-4">
+                    {showCover ? (
+                      <img
+                        key={coverUrl}
+                        src={coverUrl}
+                        alt=""
+                        loading="lazy"
+                        draggable={false}
+                        className={`absolute inset-0 h-full w-full ${settings.thumbnailFill ? 'object-cover' : 'object-contain'}`}
+                        onError={() => setFailedLibraryCovers(previous => ({ ...previous, [view.Id]: coverUrl }))}
+                      />
+                    ) : (
+                      <div className="absolute inset-y-0 right-0 w-24">
+                        {thumbs.map((t, ti) => {
+                          const url = api.posterUrl(t, 200);
+                          if (!url) return null;
+                          const rotations = [-14, -5, 5, 14];
+                          return (
+                            <img
+                              key={t.Id}
+                              src={url}
+                              alt=""
+                              draggable={false}
+                              className={`absolute top-1/2 h-[96px] w-[66px] rounded-xl shadow-md ring-1 ring-white/50 ${settings.thumbnailFill ? 'object-cover' : 'object-contain'}`}
+                              style={{
+                                right: 6 + ti * 12,
+                                transform: `translateY(-50%) rotate(${rotations[ti % rotations.length]}deg)`,
+                                zIndex: ti,
+                              }}
+                            />
+                          );
+                        })}
+                      </div>
+                    )}
+                    {!showCover && <div className="relative z-10 flex h-full max-w-[75%] flex-col justify-end bg-gradient-to-r from-white/75 via-white/40 to-transparent p-4">
                       <div className="line-clamp-2 text-[14px] font-semibold text-text-primary">
                         {view.Name}{settings.showItemCountInTitle && childCount != null ? `（${childCount}）` : ''}
                       </div>
@@ -294,7 +340,7 @@ function ServerHome({ serverId }: { serverId: string }) {
                         {COLLECTION_TYPE_CN[view.CollectionType ?? ''] ?? '媒体库'}
                       </div>
                       {folderDate && <div className="mt-0.5 text-[10px] text-text-secondary">{folderDate}</div>}
-                    </div>
+                    </div>}
                   </button>
                 );
               })}

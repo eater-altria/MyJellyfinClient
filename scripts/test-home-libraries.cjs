@@ -22,9 +22,9 @@ const views = [
 const items = (prefix,count,type='Movie') => Array.from({length:count},(_,i)=>({Id:`${prefix}-${i}`,Name:`${prefix} ${i}`,Type:type,IsFolder:type==='BoxSet',ImageTags:{Primary:'image'}}));
 const data = {first:items('first',2),movies:items('movie',61),collections:items('set',8,'BoxSet'),shows:items('show',30,'Series'),empty:[],retry:items('retry',1), 'set-0':items('member',4), '@resume':items('resume',30),'@next-up':items('next',30,'Episode')};
 const calls=[],navigation=[];let failRetry=true;
-let delayedPage;
+let delayedPage, viewRequests=0;
 const api={
-  getUserViews:async()=>({Items:views}),
+  getUserViews:async()=>{viewRequests++;return {Items:views};},
   getItem:async id=>id==='set-0'?{Id:id,Name:'Collection members',Type:'BoxSet'}:{...views.find(v=>v.Id===id),Type:'CollectionFolder'},
   queryItems:async(params,signal)=>{
     calls.push({...params,signal});
@@ -117,6 +117,18 @@ const buttons=tree=>find(tree,n=>n.type==='button');
   assert.equal(section(tree,'最新Movies').props.onLoadMore,undefined,'stop only when the server total is reached');
   section(tree,'继续观看').props.onLoadMore();section(tree,'接下来').props.onLoadMore();await flush();tree=home.render();
   assert.equal(posters(section(tree,'继续观看')).length,30);assert.equal(posters(section(tree,'接下来')).length,30);
+  const refreshHero=find(tree,n=>n.type==='Hero')[0];
+  const beforeRefresh=viewRequests, beforeCalls=calls.length;
+  refreshHero.props.onRefresh();refreshHero.props.onRefresh();tree=home.render();
+  assert.equal(posters(section(tree,'最新Movies')).length,61,'Refresh must retain visible content while requesting replacements');
+  assert(find(tree,n=>n.type==='Hero')[0].props.refreshing,'Refresh must expose its busy state');
+  await flush();tree=home.render();
+  assert.equal(viewRequests,beforeRefresh+1,'Repeated refresh clicks must not duplicate requests');
+  assert.deepEqual(calls.slice(beforeCalls).map(call=>call.ParentId).sort(),[...views.map(view=>view.Id),'@resume','@next-up'].sort(),'Refresh must reload every category plus resume and next-up');
+  assert(calls.slice(beforeCalls).every(call=>call.StartIndex===0),'Refresh must restart each paginated list at zero');
+  assert.equal(posters(section(tree,'最新Movies')).length,24,'Refreshed content must replace the old pages');
+  assert(!find(tree,n=>n.type==='Hero')[0].props.refreshing,'Refresh must finish after all list requests settle');
+  console.log('PASS: home refresh retains content, prevents duplicate requests and reloads all lists from their first page');
   home.unmount();
   assert.equal(backdropState().source,null,'Leaving home must release its ambient artwork');
   restoredHero.props.onCurrentItemChange(restoredHero.props.items[0]);
@@ -150,14 +162,15 @@ const buttons=tree=>find(tree,n=>n.type==='button');
   const Hero=load('src/components/HeroCarousel.tsx',{
     react:{useState:initial=>{const i=heroCursor++;return [heroStates[i]??initial,next=>{heroStates[i]=typeof next==='function'?next(heroStates[i]):next;}];},useCallback:fn=>fn,useEffect:effect=>heroEffects.push(effect)},
     'react/jsx-runtime':{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})},
-    'react-router-dom':{useNavigate:()=>path=>navigation.push(path)},'./icons':{IconChevronLeft:'Icon',IconChevronRight:'Icon',IconSearch:'Icon'},
+    'react-router-dom':{useNavigate:()=>path=>navigation.push(path)},'./icons':{IconChevronLeft:'Icon',IconChevronRight:'Icon',IconSearch:'Icon',IconRefresh:'Icon'},
     './LiquidGlass':{__esModule:true,default:'Glass'},
   }).default;
   const carouselItems=items('carousel',61);
   const publishCurrent=item=>heroNotifications.push(item);
-  const renderHero=(list=carouselItems)=>{
+  let refreshClicks=0;
+  const renderHero=(list=carouselItems,refreshing=false)=>{
     heroCursor=0;
-    const tree=Hero({api,items:list,serverId:'server',onCurrentItemChange:publishCurrent});
+    const tree=Hero({api,items:list,serverId:'server',onCurrentItemChange:publishCurrent,onRefresh:()=>refreshClicks++,refreshing});
     // Exercise actual effects while immediately disposing the fixture's autoplay interval.
     for(const effect of heroEffects.splice(0))effect()?.();
     return tree;
@@ -175,6 +188,16 @@ const buttons=tree=>find(tree,n=>n.type==='button');
   assert.equal(searchUrl.pathname,'/search');
   assert.equal(searchUrl.searchParams.get('serverId'),'server','Carousel search must keep the displayed server scope');
   assert(heroButton('上一张预览')&&heroButton('下一张预览'),'both carousel directions remain accessible');
+  const refreshButton=heroButton('刷新当前服务器列表');stopped=false;
+  const previousNavigation=navigation.length;
+  refreshButton.props.onClick({stopPropagation(){stopped=true;}});
+  assert(stopped&&refreshClicks===1&&navigation.length===previousNavigation,'Refresh must invoke its handler without navigating or opening a detail');
+  assert.equal(refreshButton.props.title,'刷新');
+  hero=renderHero(carouselItems,true);
+  assert(heroButton('刷新当前服务器列表').props.disabled,'Busy refresh must disable its button');
+  heroButton('刷新当前服务器列表').props.onClick({stopPropagation(){}});
+  assert.equal(refreshClicks,1,'Busy refresh must not invoke the handler again');
+  hero=renderHero();
   assert.equal(buttons(hero).filter(button=>button.props['aria-label']?.startsWith('查看第 ')).length,7,'keep a bounded indicator strip rather than dozens of dots');
   for(let i=0;i<60;i++)heroButton('下一张预览').props.onClick({stopPropagation(){}});
   hero=renderHero();
@@ -182,6 +205,7 @@ const buttons=tree=>find(tree,n=>n.type==='button');
   assert.equal(heroNotifications.at(-1),carouselItems[60],'Backdrop publication must follow navigation to the last loaded item');
   hero=renderHero([carouselItems[0]]);
   assert(heroButton('搜索当前服务器媒体库'),'A single-item carousel must retain search');
+  assert(heroButton('刷新当前服务器列表'),'A single-item carousel must retain refresh');
   assert(!heroButton('上一张预览')&&!heroButton('下一张预览'),'A single-item carousel needs no arrows');
   renderHero([]);
   assert.equal(heroNotifications.at(-1),null,'An emptied carousel must publish the gradient fallback');
