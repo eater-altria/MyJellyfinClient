@@ -1,122 +1,27 @@
-import { clientIdentityHeaders, normalizeAddress, type PublicSystemInfo, type ServerProtocol } from './mediaServer';
-import { DEFAULT_CLIENT_IDENTITY, type ClientIdentities } from '../utils/clientIdentity';
+import { availableServerConnectors, getServerConnector, supportedServerNames } from './connectors';
+import { ServerDetectionError, type DetectedServer, type DiscoveryOptions } from './connectors/types';
+import { normalizeAddress } from './helpers';
 
-export interface DetectedServer {
-  address: string;
-  protocol: ServerProtocol;
-  info: PublicSystemInfo;
-  authorizationOnly?: boolean;
-}
+export { ServerDetectionError } from './connectors/types';
+export type { DetectedServer, DiscoveryOptions } from './connectors/types';
 
-export class ServerDetectionError extends Error {}
-
-function identifyProtocol(info: PublicSystemInfo, headers: Headers): ServerProtocol | null {
-  // ServerName is user-defined, so never use it (or the port) to identify a product.
-  const product = info.ProductName?.toLowerCase() ?? '';
-  if (product.includes('jellyfin')) return 'jellyfin';
-  if (product.includes('emby') || product.includes('mediabrowser')) return 'emby';
-  if (!product) {
-    const banner = headers.get('Server')?.toLowerCase() ?? '';
-    if (banner.includes('jellyfin')) return 'jellyfin';
-    if (banner.includes('emby')) return 'emby';
-  }
-  // Emby proxies can replace ProductName with custom branding. Its 3.x/4.x
-  // version families remain usable after validating the public API response.
-  const major = Number(info.Version?.match(/^(\d+)\./)?.[1]);
-  if (major === 3 || major === 4) return 'emby';
-  if (product) return null;
-  // Legacy Jellyfin servers may omit ProductName.
-  if (major >= 10) return 'jellyfin';
-  return null;
-}
-
-function candidateAddresses(address: string): string[] {
-  const candidates = [address];
-  if (/\/(?:emby|mediabrowser|jellyfin)$/i.test(new URL(address).pathname)) {
-    candidates.push(address.replace(/\/(?:emby|mediabrowser|jellyfin)$/i, ''));
-  } else {
-    candidates.push(address + '/emby', address + '/jellyfin', address + '/mediabrowser');
-  }
-  return [...new Set(candidates)];
-}
-
-/** Probe only public endpoints; credentials are sent after a supported server is identified. */
-export async function detectServer(input: string, options: { signal?: AbortSignal; timeoutMs?: number; clientIdentities?: ClientIdentities; protocol?: ServerProtocol } = {}): Promise<DetectedServer> {
+/** Credentials are sent only after discovery succeeds; manual choice stays authoritative. */
+export async function detectServer(input: string, options: DiscoveryOptions = {}): Promise<DetectedServer> {
   let address: string;
   try { address = normalizeAddress(input); }
   catch { throw new ServerDetectionError('服务器地址无效，请输入 HTTP 或 HTTPS 地址'); }
-  let unrecognized = false;
-  let rootFallback: DetectedServer | undefined;
-  const identities = options.clientIdentities
-    ? options.protocol ? [options.clientIdentities[options.protocol]] : Object.values(options.clientIdentities)
-    : [DEFAULT_CLIENT_IDENTITY];
-  const distinctIdentities = [...new Map(identities.map(identity => [JSON.stringify(identity), identity])).values()];
-  for (const candidate of candidateAddresses(address)) {
-    // Emby may expose public metadata at / while its media proxy expects
-    // /emby. Prefer a validated prefix belonging to the same server.
-    if (rootFallback && !/\/(?:emby|mediabrowser)$/i.test(new URL(candidate).pathname)) continue;
-    // The product is unknown until discovery succeeds. Try each configured
-    // identity against the public endpoint without sending account credentials.
-    for (const identity of distinctIdentities) {
-      if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      options.signal?.addEventListener('abort', abort, { once: true });
-      const timeout = setTimeout(abort, options.timeoutMs ?? 5000);
-      try {
-        const headers = clientIdentityHeaders(identity, options.protocol);
-        let authorizationOnly = false;
-        const request = (requestHeaders: Record<string, string>) => fetch(candidate + '/System/Info/Public', {
-          headers: requestHeaders, signal: controller.signal, cache: 'no-store',
-        });
-        let response: Response;
-        try { response = await request(headers); }
-        catch (error) {
-          if (!(error instanceof TypeError) || controller.signal.aborted) throw error;
-          // Some media proxies permit Authorization but omit X-Emby-* from
-          // their CORS allowlist. Retry only credential-free discovery; never
-          // replay login or mutations after an ambiguous transport failure.
-          response = await request({ Authorization: headers['X-Emby-Authorization'], Accept: headers.Accept });
-          authorizationOnly = true;
-        }
-        if (!response.ok) continue;
-        const info = await response.json() as PublicSystemInfo;
-        if (!info || typeof info.Id !== 'string' || !info.Id || typeof info.Version !== 'string' || !info.Version) continue;
-        const protocol = options.protocol ?? identifyProtocol(info, response.headers);
-        if (!protocol) { unrecognized = true; continue; }
-        // Same-origin redirects can reveal a required API prefix. A public
-        // metadata redirect to another host must not replace the chosen media
-        // route or move later account credentials to that host.
-        const finalUrl = response.url || candidate + '/System/Info/Public';
-        const endpoint = new URL(finalUrl);
-        if (!/\/System\/Info\/Public\/?$/i.test(endpoint.pathname)) continue;
-        endpoint.pathname = endpoint.pathname.replace(/\/System\/Info\/Public\/?$/i, '');
-        endpoint.search = ''; endpoint.hash = '';
-        const requested = new URL(candidate);
-        const sameOrigin = endpoint.origin === requested.origin;
-        const secureUpgrade = requested.protocol === 'http:' && endpoint.protocol === 'https:'
-          && requested.hostname === endpoint.hostname && !requested.port && !endpoint.port;
-        const detected = { address: normalizeAddress(sameOrigin || secureUpgrade ? endpoint.toString() : candidate), protocol, info,
-          ...(authorizationOnly ? { authorizationOnly: true } : {}) };
-        if (rootFallback && (info.Id !== rootFallback.info.Id || protocol !== rootFallback.protocol)) continue;
-        if (protocol === 'emby' && candidate === address && !/\/(?:emby|mediabrowser)$/i.test(requested.pathname)) {
-          rootFallback = detected;
-          break;
-        }
-        return detected;
-      } catch {
-        if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-        // Changing identity cannot fix a transport/JSON failure. Try the next
-        // API prefix without doubling the timeout for this same endpoint.
-        break;
-      } finally {
-        clearTimeout(timeout);
-        options.signal?.removeEventListener('abort', abort);
-      }
+  const connectors = options.protocol ? [getServerConnector(options.protocol)] : availableServerConnectors;
+  const handlers = [...new Set(connectors.map(connector => connector.discover))];
+  let failure: ServerDetectionError | undefined;
+  for (const discover of handlers) {
+    if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    try {
+      // Manual selection controls auth/product, while related API aliases remain discoverable.
+      return await discover(address, options, availableServerConnectors.filter(connector => connector.discover === discover));
+    } catch (error) {
+      if (!(error instanceof ServerDetectionError)) throw error;
+      failure = error;
     }
   }
-  if (rootFallback) return rootFallback;
-  throw new ServerDetectionError(unrecognized
-    ? '无法识别服务器类型，请确认地址指向 Jellyfin 或 Emby 服务器'
-    : '未检测到 Jellyfin 或 Emby 服务器，请检查地址、网络和反向代理路径');
+  throw failure ?? new ServerDetectionError(`未检测到 ${supportedServerNames} 服务器，请检查地址、网络和反向代理路径`);
 }

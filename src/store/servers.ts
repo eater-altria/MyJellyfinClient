@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { MediaServerApi, AuthResult, normalizeAddress, type ServerProtocol } from '../api/mediaServer';
+import { createServerApi, getServerConnector, availableServerConnectors, DEFAULT_SERVER_PROTOCOL,
+  normalizeAddress, type MediaServerApi, type AuthResult, type ServerProtocol } from '../api/mediaServer';
 import { detectServer } from '../api/detectServer';
 import { getClientIdentity } from './settings';
 import { normalizeClientIdentityText } from '../utils/clientIdentity';
@@ -37,19 +38,20 @@ interface ServersState {
   addServer: (address: string, username: string, password: string, name?: string, onDetected?: (protocol: ServerProtocol) => void, protocol?: ServerProtocol) => Promise<SavedServer>;
   updateServer: (id: string, options: { name: string; address: string; username: string; password?: string; protocol?: ServerProtocol; onDetected?: (protocol: ServerProtocol) => void; registerNewDevice?: { clientName: string } }) => Promise<void>;
   removeServer: (id: string) => void;
+  reorderServer: (id: string, targetId: string, placement: 'before' | 'after') => void;
   setActive: (id: string | null) => void;
   refreshServer: (id: string) => Promise<void>;
   getApi: (id?: string | null) => MediaServerApi | null;
 }
 
 function makeApi(s: SavedServer): MediaServerApi {
-  return new MediaServerApi(s.address, s.token, s.userId, s.protocol, () => {
-    const identity = getClientIdentity(s.protocol ?? 'jellyfin');
+  return createServerApi({ address: s.address, token: s.token, userId: s.userId, protocol: s.protocol, identity: () => {
+    const identity = getClientIdentity(s.protocol ?? DEFAULT_SERVER_PROTOCOL);
     return s.clientName ? { ...identity, name: s.clientName } : identity;
-  }, s.deviceId, s.authorizationOnly);
+  }, deviceId: s.deviceId, authorizationOnly: s.authorizationOnly });
 }
 
-const discoveryIdentities = () => ({ jellyfin: getClientIdentity('jellyfin'), emby: getClientIdentity('emby') });
+const discoveryIdentities = () => Object.fromEntries(availableServerConnectors.map(({ id }) => [id, getClientIdentity(id)]));
 
 export const useServers = create<ServersState>()(
   persist(
@@ -67,7 +69,7 @@ export const useServers = create<ServersState>()(
       async addServer(address, username, password, name, onDetected, selectedProtocol) {
         const { address: base, protocol, info, authorizationOnly } = await detectServer(address, { clientIdentities: discoveryIdentities(), protocol: selectedProtocol });
         onDetected?.(protocol);
-        const api = new MediaServerApi(base, undefined, undefined, protocol, () => getClientIdentity(protocol), undefined, authorizationOnly);
+        const api = createServerApi({ address: base, protocol, identity: () => getClientIdentity(protocol), authorizationOnly });
         const auth: AuthResult = await api.authenticate(username, password);
         const saved: SavedServer = {
           id: crypto.randomUUID(),
@@ -107,15 +109,20 @@ export const useServers = create<ServersState>()(
         const address = normalizeAddress(options.address);
         let saved = { ...original, name: options.name.trim() || original.name, address };
         if (address !== original.address || options.username !== original.userName || options.password !== undefined || options.registerNewDevice
-          || (options.protocol !== undefined && options.protocol !== (original.protocol ?? 'jellyfin'))) {
+          || (options.protocol !== undefined && options.protocol !== (original.protocol ?? DEFAULT_SERVER_PROTOCOL))) {
           const identities = discoveryIdentities();
           if (options.registerNewDevice) {
-            identities.emby = { ...identities.emby, name: normalizeClientIdentityText(options.registerNewDevice.clientName) || identities.emby.name };
+            const registrationProtocol = options.protocol ?? original.protocol ?? DEFAULT_SERVER_PROTOCOL;
+            if (!getServerConnector(registrationProtocol).supportsDeviceRegistration) {
+              throw new ServerRegistrationError('此服务器连接器不支持重新登记登录设备');
+            }
+            identities[registrationProtocol] = { ...identities[registrationProtocol],
+              name: normalizeClientIdentityText(options.registerNewDevice.clientName) || identities[registrationProtocol].name };
           }
           const detected = await detectServer(address, { clientIdentities: identities, protocol: options.protocol });
-          if (options.registerNewDevice && detected.protocol !== 'emby') throw new ServerRegistrationError('重新登记登录设备仅适用于 Emby 服务器');
+          if (options.registerNewDevice && !getServerConnector(detected.protocol).supportsDeviceRegistration) throw new ServerRegistrationError('此服务器连接器不支持重新登记登录设备');
           options.onDetected?.(detected.protocol);
-          const registration = options.registerNewDevice && detected.protocol === 'emby' ? {
+          const registration = options.registerNewDevice ? {
             deviceId: crypto.randomUUID(),
             clientName: normalizeClientIdentityText(options.registerNewDevice.clientName) || getClientIdentity(detected.protocol).name,
           } : {};
@@ -134,6 +141,20 @@ export const useServers = create<ServersState>()(
           servers: state.servers.map((s) => s.id === id ? saved : s),
           apis: { ...state.apis, [id]: makeApi(saved) },
         }));
+      },
+
+      reorderServer(id, targetId, placement) {
+        const servers = get().servers;
+        const from = servers.findIndex(server => server.id === id);
+        const target = servers.findIndex(server => server.id === targetId);
+        if (from < 0 || target < 0 || from === target) return;
+        const next = [...servers];
+        const [server] = next.splice(from, 1);
+        const insertion = next.findIndex(item => item.id === targetId) + (placement === 'after' ? 1 : 0);
+        if (insertion === from) return;
+        next.splice(insertion, 0, server);
+        // Both surfaces consume this persisted array. Keep connections/API instances intact.
+        set({ servers: next });
       },
 
       removeServer(id) {
@@ -160,7 +181,7 @@ export const useServers = create<ServersState>()(
         if (!s) return;
         const cached = get().apis[id];
         const api = cached && cached.baseUrl === s.address && cached.token === s.token
-          && cached.userId === s.userId && cached.protocol === (s.protocol ?? 'jellyfin') ? cached : makeApi(s);
+          && cached.userId === s.userId && cached.protocol === (s.protocol ?? DEFAULT_SERVER_PROTOCOL) ? cached : makeApi(s);
         const stillCurrent = () => {
           const current = get().servers.find((x) => x.id === id);
           return current?.address === s.address && current.token === s.token && current.protocol === s.protocol

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const esbuild = require('esbuild');
 function load(file, imports = {}) {
+  if (['src/api/mediaServer.ts', 'src/utils/clientIdentity.ts'].includes(file)) return require('./source-bundle.cjs')(file);
   const code = esbuild.transformSync(fs.readFileSync(file, 'utf8'), { loader: file.endsWith('.tsx') ? 'tsx' : 'ts', format: 'cjs', jsx: 'automatic' }).code;
   const module = {exports:{}};
   new Function('require','module','exports',code)(name => imports[name] ?? (name === '../hooks/useBrowseActivity' ? { useBrowseActivity: () => true } : name === '../hooks/useAutoPagination' ? { useAutoPagination: () => ({current:null}) } : name === '../utils/browseHistory' ? load('src/utils/browseHistory.ts') : name === '../utils/libraryFilters' ? load('src/utils/libraryFilters.ts') : name === '../components/LibraryFilterDialog' ? {default:'FilterDialog'} : require(name)),module,module.exports);
@@ -32,7 +33,7 @@ const api={
     const list=params.ParentId==='collections' && params.IncludeItemTypes!=='BoxSet'?[]:data[params.ParentId]??[];
     return {Items:list.slice(params.StartIndex,params.StartIndex+params.Limit),TotalRecordCount:list.length};
   },
-  getLibraryItems(view,start,limit,signal){return media.MediaServerApi.prototype.getLibraryItems.call(this,view,start,limit,signal);},
+  getLibraryItems(view,start,limit,signal){return require('./source-bundle.cjs')('src/api/connectors/jellyfin.ts').JellyfinConnectorApi.prototype.getLibraryItems.call(this,view,start,limit,signal);},
   getResumeItems:async(limit,start,signal)=>{calls.push({ParentId:'@resume',StartIndex:start,Limit:limit,signal});return {Items:data['@resume'].slice(start,start+limit),TotalRecordCount:30};},
   getNextUp:async(limit,start,signal)=>{calls.push({ParentId:'@next-up',StartIndex:start,Limit:limit,signal});return {Items:data['@next-up'].slice(start,start+limit),TotalRecordCount:30};},
   backdropUrl:item=>item.Type==='Movie'||item.Type==='Series'?`https://fixture/${item.Id}`:null,

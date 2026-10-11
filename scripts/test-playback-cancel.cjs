@@ -58,6 +58,7 @@ function mount(protocol, pending) {
     dispatchEvent: event => { keys.get(event.type)?.(event); return !event.defaultPrevented; },
   };
   const modules = {
+    '../api/mediaServer': require('./source-bundle.cjs')('src/api/mediaServer.ts'),
     '../hooks/useBrowseActivity': { useBrowseActivity: () => true },
     react: { useEffect: fn => effects.push(fn), useRef: current => ({ current }),
       useState: initial => [initial, value => states.push(value)] },

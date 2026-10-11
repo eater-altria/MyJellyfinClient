@@ -5,6 +5,7 @@ import Toggle from '../components/Toggle';
 import LiquidGlass from '../components/LiquidGlass';
 import UpdateCheck from '../components/UpdateCheck';
 import { isTauri } from '../platform/window';
+import { availableServerConnectors, getServerConnector, serverProtocolName } from '../api/mediaServer';
 import type { ClientIdentity, ClientIdentityProtocol } from '../utils/clientIdentity';
 import {
   IconSettings,
@@ -134,7 +135,7 @@ function IdentityTextRow({ protocol, label, field, placeholder }: {
     setDraft(useSettings.getState().clientIdentities[protocol][field]);
   };
   return <Row label={label}>
-    <input aria-label={`${protocol === 'jellyfin' ? 'Jellyfin' : 'Emby'} ${label}`} value={draft} placeholder={placeholder} maxLength={CLIENT_IDENTITY_MAX_LENGTH}
+    <input aria-label={`${serverProtocolName(protocol)} ${label}`} value={draft} placeholder={placeholder} maxLength={CLIENT_IDENTITY_MAX_LENGTH}
       autoComplete="off" spellCheck={false} onChange={event => setDraft(event.target.value)} onBlur={save}
       onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); save(); } }}
       className={`${selectCls} w-64`} />
@@ -144,13 +145,13 @@ function IdentityTextRow({ protocol, label, field, placeholder }: {
 function ClientIdentitySection({ protocol }: { protocol: ClientIdentityProtocol }) {
   const name = useSettings(s => s.clientIdentities[protocol].name);
   const set = useSettings(s => s.setClientIdentity);
-  const product = protocol === 'jellyfin' ? 'Jellyfin' : 'Emby';
+  const product = serverProtocolName(protocol);
   const presets = CLIENT_NAME_PRESETS[protocol];
   const [custom, setCustom] = useState(false);
   const isPreset = presets.some(preset => preset === name);
   const selected = custom || (name && !isPreset) ? 'custom' : name || 'default';
   return <Section label={`${product} 客户端标识`}
-    footnote={`用于 ${product} 的登录与服务器鉴权，留空使用 RodelPlayer 默认标识，按回车或离开输入框保存。桌面版 HTTP User-Agent 统一采用小幻格式；这些字段仅调整鉴权标识。${protocol === 'emby' ? '重新登记连接时填写的客户端名称优先于此预设；已有设备可能保留首次登记信息。' : '预设改变后用于后续请求；服务器显示的信息可能暂时保留。'}`}>
+    footnote={`用于 ${product} 的登录与服务器鉴权，留空使用 RodelPlayer 默认标识，按回车或离开输入框保存。桌面版 HTTP User-Agent 统一采用小幻格式；这些字段仅调整鉴权标识。${getServerConnector(protocol).supportsDeviceRegistration ? '重新登记连接时填写的客户端名称优先于此预设；已有设备可能保留首次登记信息。' : '预设改变后用于后续请求；服务器显示的信息可能暂时保留。'}`}>
     <Row label="客户端预设">
       <select aria-label={`${product} 客户端预设`} value={selected} className={`${selectCls} w-64`}
         onChange={event => {
@@ -229,8 +230,7 @@ function GeneralTab() {
           </select>
         </Row>
       </Section>
-      <ClientIdentitySection protocol="jellyfin" />
-      <ClientIdentitySection protocol="emby" />
+      {availableServerConnectors.map(({ id }) => <ClientIdentitySection key={id} protocol={id} />)}
       <Section label="关于与更新" footnote="点击后检查 GitHub 上的最新正式 Release，由你前往发布页下载并安装。">
         <UpdateCheck />
       </Section>

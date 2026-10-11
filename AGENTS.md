@@ -21,11 +21,16 @@
 | 位置 | 职责 |
 | --- | --- |
 | `src/App.tsx`、`src/main.tsx` | 路由、桌面/浏览器播放器选择、主题初始化 |
-| `src/api/mediaServer.ts` | Jellyfin/Emby 共用 API、媒体类型、URL 解析、查询及分页 |
-| `src/api/detectServer.ts` | 服务器产品识别及 API 路径探测 |
+| `src/api/mediaServer.ts` | 稳定 API 入口、连接器工厂及旧构造调用兼容导出 |
+| `src/api/connectors/index.ts`、`types.ts` | 连接器注册表、由注册键派生的协议类型、连接器及媒体 API 契约 |
+| `src/api/connectors/jellyfin.ts`、`emby.ts` | 各自的鉴权方式、产品识别、API 别名、筛选接口与播放协商差异 |
+| `src/api/connectors/MediaBrowserApi.ts`、`mediaBrowserDiscovery.ts`、`mediaBrowserAuth.ts` | 两种相关协议共用的 REST、公开探测、URL 与设备鉴权实现；其他后端可独立实现契约 |
+| `src/api/types.ts`、`helpers.ts` | 页面使用的统一媒体模型、列表规则、URL 规范化、错误及格式化 |
+| `src/api/detectServer.ts` | 按连接器调度公开探测；同一探测函数合并执行，手动协议保持优先 |
 | `src/utils/clientIdentity.ts`、`src/utils/defaultClientIdentity.json` | 客户端名称预设、共享兼容默认标识和文本规范化；设备 ID 仍由 API 使用原有持久值 |
 | `src-tauri/src/client_identity.rs` | 桌面 WebView 的真实 HTTP User-Agent、共享兼容版本与只读 Windows 版本查询 |
 | `src/store/servers.ts` | 服务器登录状态、令牌、API 实例和持久化 |
+| `src/hooks/useServerReorder.ts`、`src/store/serverReorder.ts`、`src/components/ServerReorderFeedback.tsx` | 两处服务器排序的指针/键盘操作、临时拖拽状态、跟随预览及插入位置 |
 | `src/store/settings.ts`、`src/pages/Settings.tsx` | 设置定义、默认值、持久化和设置界面 |
 | `src/components/UpdateCheck.tsx`、`src/api/appUpdates.ts`、`src/platform/appUpdates.ts`、`src-tauri/src/app_updates.rs` | 手动检查 GitHub 正式 Release、版本比较和固定发布页的系统浏览器入口 |
 | `src/store/libraryPreferences.ts`、`src/utils/librarySort.ts`、`src/components/LibrarySortMenu.tsx` | 媒体库排序字段、独立升降序、按服务器/账号/媒体库持久化及排序菜单 |
@@ -54,6 +59,8 @@
 | `src-tauri/resources/mpv/portable_config/shaders/mjc-glass.glsl` | 原生控件背后视频的局部 GPU 模糊、边缘折射和色散 |
 
 `src/api/jellyfin.ts` 是旧模块名的兼容导出，新代码优先使用 `mediaServer.ts`。
+
+新增后端在 `src/api/connectors/` 实现 `ServerConnector` 和 `MediaServerApi`，再加入 `index.ts` 的注册表；注册键必须等于连接器 `id`。添加/编辑选项、名称、默认服务器图标、客户端标识分组/预设、API 创建和重建、设备重新登记入口及原生播放协商策略都读取注册表，不在页面或 store 增加协议分支。旧连接缺少协议时仍按 Jellyfin 处理，保存字段和设备 ID 不迁移。`createServerApi` 接受具名连接参数；旧 `new MediaServerApi(...)` 调用继续返回具体连接器实例。非 Jellyfin/Emby 后端应自行解析响应为统一媒体模型，并实现请求取消、鉴权与 URL 安全边界，不必继承 `MediaBrowserApi`。扩展说明见 `README.md`。
 
 ## 环境与启动
 
@@ -111,6 +118,8 @@ PowerShell 脚本需兼容 Windows PowerShell 5.1。无 BOM 的 UTF-8 中文可�
 12. 编辑 Emby 连接可显式勾选「重新登记此服务器的登录设备」，并填写该连接的客户端名称、重新输入密码。仅该连接生成新的 `deviceId`，成功登录后与 `clientName` 一起保存；失败保留原连接。之后登录、缓存/重建 API、播放协商和流 URL 共用此固定 ID，客户端名称优先使用连接的覆盖值，版本及设备名称仍来自对应产品设置。其他连接和原有全局设备 ID 保持稳定；普通删除、添加、编辑和重新登录不自动重置设备身份。该选项用于服务端按首次设备登记限制播放的兼容情况，不应自动替用户选择客户端名称。
 
 ## 页面保留与浏览筛选
+
+服务器卡片与侧栏「已连接的服务器」共用 `servers` 数组顺序。两处均支持按住拖拽排序，也可跨区域拖放；超过 6 个逻辑像素后显示跟随鼠标的服务器卡片/行（图标、名称和协议）、原位置虚线占位与插入标记，松开后通过 `reorderServer` 原子更新并保存到原有 `mjc:servers`。Esc、失焦、指针取消、无效落点、页面隐藏/卸载和拖动源或目标被删除时不提交；拖动后抑制该次点击，普通点击、右键编辑和卡片编辑/删除按钮仍可用。长列表在拖动到滚动容器边缘时自动滚动；Alt+↑/↓ 可移动焦点所在服务器，保留焦点并播报位置。排序不改变账号、令牌、设备身份、活动服务器或 API 实例；刷新、编辑和新增连接保留当前顺序，新增连接追加到末尾。预览状态只在内存中，重启只恢复已经提交的顺序。
 
 全部路由类型经 `BrowsePageHost` 保留最近 20 个页面实例和 DOM，不将页面数据、媒体图片 URL 或位置写入持久化存储。切换页面时隐藏旧页面，保存并恢复各个垂直/横向滚动容器的位置；数据已加载时返回不重查第一页，保留分页、搜索、设置页标签和媒体库筛选。连续切换媒体共用一个播放器页面实例，播放会话仍每次重新建立。服务器/账号 API 身份变化时清除相关旧页面；正常刷新服务器元数据复用同一 API，服务器管理页的本地表单不因 API 刷新而重新挂载，避免刷新与卸载循环导致添加/编辑失效。
 
@@ -187,6 +196,10 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 播放诊断回归覆盖脱敏、完整响应体中的 HTTP 错误、独立编号、取消后的迟到响应、日志轮转与满队列非阻塞；真实 mpv 从本地 HTTP 522 fixture 接收日志事件并与 `end-file/error` 关联。
 
 `test-mpv-setup.ps1` 在 Windows PowerShell 5.1 下使用离线传输 fixture 和真实 `tar.exe` 验证缺失下载、完整资源复用、部分资源修复、控制脚本保留、校验失败、架构与压缩包检查、安装回滚和临时目录清理，不使用账号或访问网络。
+
+`test:servers` 先运行 `test-connectors.cjs`，仅在测试编译时给注册表注入独立的第三连接器，使用不同端点/鉴权/响应格式的本地 HTTP fixture 验证完整应用的 TypeScript 编译、自动/手动探测、登录、持久化、API 缓存及重建、实时标识、失败回滚、取消、真实 React 静态渲染的连接选项/设置分组和默认图标。测试连接器不进入生产注册表；这不属于新增真实后端支持。
+
+`test:servers` 的 `test-server-order.cjs` 使用真实 React、隔离 Chromium profile 与原生鼠标/键盘事件，验证卡片、侧栏及跨区域拖动、真实指针捕获、跟随预览的可见位置与服务器身份、同步顺序、仅落下保存、焦点和普通点击/编辑、Esc/指针取消/落点无效、隐藏/卸载清理、拖动中删除/新增、刷新与编辑、两处自动滚动、持久化及全新页面/store 恢复。覆盖普通/窄窗口和 100% / 125% / 150% DPI；只使用合成服务器，不读取用户浏览器、账号或地址，不属于真实 Tauri/mpv 验证。
 
 `test:settings` 的更新检查回归使用离线 GitHub 响应及真实 React/Chromium 设置页面，验证仅点击请求、当前版本、新旧/无效版本、无 Release、网络/HTTP/限流错误、超时、防重、取消/迟到响应及普通/窄窗口和 100% / 125% / 150% DPI 布局，不访问 GitHub 或用户服务器。
 

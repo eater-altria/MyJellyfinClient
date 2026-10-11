@@ -1,6 +1,6 @@
 {
   "name": "my-jellyfin-client",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "A Jellyfin / Emby Windows client with a Liquid Glass inspired UI",
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "build": "tsc -b && vite build",
     "build:win": "npm run build && tauri build",
     "typecheck": "tsc -b --noEmit",
-    "test:servers": "node scripts/test-media-servers.cjs && node scripts/test-client-user-agent.cjs",
+    "test:servers": "node scripts/test-connectors.cjs && node scripts/test-media-servers.cjs && node scripts/test-client-user-agent.cjs && node scripts/test-server-order.cjs",
     "test:playback": "node scripts/test-playback-diagnostics.cjs && node scripts/test-playback-cancel.cjs && node scripts/test-browser-player.cjs",
     "test:home": "node scripts/test-home-libraries.cjs && node scripts/test-library-sort.cjs && node scripts/test-issue2-navigation.cjs",
     "test:settings": "node scripts/test-list-settings.cjs && node scripts/test-playback-preferences.cjs && node scripts/test-browser-settings.cjs && node scripts/test-app-updates.cjs",

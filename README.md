@@ -16,11 +16,13 @@
 
 ## Jellyfin / Emby 服务器
 
-添加时输入服务器地址、用户名和密码即可，服务器类型自动识别，无需选择协议。程序先请求公共系统信息，优先读取产品标识，再兼容没有产品标识的版本信息；也会探测 `/emby`、`/jellyfin` 和旧版 `/mediabrowser` API 路径。支持带反向代理路径的地址和复制的 `/web/index.html` 地址。
+添加时选择 Jellyfin 或 Emby（默认 Jellyfin），再输入服务器地址、用户名和密码。程序校验公共系统信息并探测 `/emby`、`/jellyfin` 和旧版 `/mediabrowser` API 路径，始终使用所选协议，不因服务端产品名称改变选择。未指定协议的兼容 API 调用仍按产品标识、响应头和版本自动识别。支持带反向代理路径的地址和复制的 `/web/index.html` 地址。
 
-识别结果和实际 API 地址会与登录令牌一起保存，服务器卡片和侧栏使用不同图标。原有未记录类型的服务器按 Jellyfin 加载。修改服务器地址或重新登录时会重新识别。
+所选协议和实际 API 地址会在登录成功后与令牌一起保存，服务器卡片和侧栏使用不同图标。原有未记录类型的服务器按 Jellyfin 加载。修改类型、地址或重新登录时重新验证，失败保留原连接。
 
 两种协议共用媒体库、电影/剧集详情、演职人员、搜索、收藏、观看记录和播放进度上报。原生 mpv 优先直接播放；需要转码时使用服务器返回的转码地址，外部字幕地址也会保留代理前缀。服务器在线探测继续每 30 秒执行一次。
+
+服务器卡片和左侧已连接列表均可按住拖拽排序，拖动时显示带图标和名称的跟随预览，松开后两处顺序同步保存，重启仍保留。也可跨区域拖放；Esc 取消，Alt+↑/↓ 可用键盘调整顺序。拖动到长列表边缘时自动滚动。
 
 「设置 → 通用」可分别调整 Jellyfin / Emby 的客户端名称、版本和设备名称；默认使用 RodelPlayer / 2.2610.12.0 / Windows PC 兼容标识，已手动设置的值保持不变。桌面 WebView 的 HTTP User-Agent 统一使用相同名称和版本，并附带实际 Windows 版本及架构。这里的客户端兼容版本与本应用的 Release 版本不同；mpv 媒体请求仍使用原有 User-Agent。
 
@@ -59,6 +61,32 @@ npm ci
 scripts\dev-tauri.ps1   # 启动 vite + tauri dev（沙箱环境可加 $env:MJC_WEBVIEW_DATA 指向可写目录）
 npm run dev:web         # 仅浏览器中调试前端 (http://localhost:5173，回退 HTML5 播放器)
 ```
+
+### 扩展服务器连接器
+
+后端实现位于 `src/api/connectors/`。`mediaServer.ts` 是页面使用的稳定入口，`detectServer.ts` 调度公开探测，`store/servers.ts` 负责登录结果的原子保存和 API 缓存。Jellyfin 与 Emby 各有独立连接器，共用 `MediaBrowserApi` 的 REST 实现；独立协议可直接实现 `connectors/types.ts` 中的 `MediaServerApi`。
+
+新增后端只需实现连接器模块并在 `connectors/index.ts` 注册，不需要修改服务器管理、设置和播放器页面：
+
+1. 实现媒体 API 契约，将后端响应转换成 `api/types.ts` 的统一模型，提供登录、列表、详情、筛选、播放协商、图片/媒体 URL、收藏和进度上报等操作。`ApiConnection` 传入地址、令牌、账号、动态客户端标识函数以及可选设备 ID、鉴权兼容模式；标识按请求读取，避免缓存旧设置。收藏和已看变化使用 `updateBrowseUserData` 通知保留页面。
+2. 导出 `ServerConnector`：稳定 `id`、显示名称、客户端名称预设、`publicHeaders`、`discover` 和 `createApi`。`supportsDeviceRegistration` 控制连接的显式设备重新登记；`requiresNativePlaybackInfo` 控制原生直播放前是否必须协商。可选 `icon` 使用现有品牌图标，省略时自动使用通用服务器图标。
+3. 在注册表导入并增加一项，键与 `id` 保持一致。例如连接器模块导出 `acmeConnector` 后：
+
+```ts
+import { acmeConnector } from './acme';
+
+export const serverConnectors = {
+  jellyfin: jellyfinConnector,
+  emby: embyConnector,
+  acme: acmeConnector,
+} as const satisfies Record<string, ServerConnector>;
+```
+
+`ServerProtocol` 自动从注册键派生。连接弹窗、客户端标识设置、预设、名称、图标和 API 工厂会自动接入；旧连接缺少协议时仍使用 Jellyfin。生产连接器应完整实现媒体 API，不能使用测试 fixture 中的未实现操作。
+
+`discover(address, options, connectors)` 只请求公开信息，支持 `signal` / `timeoutMs`，将有效结果转换为 `DetectedServer`，不携带账号、密码或令牌。无法匹配或探测失败时抛出 `ServerDetectionError`；取消时保留 `AbortError`。指定协议时以用户选择为准；自动模式按注册顺序尝试不同探测函数，共用同一函数的相关协议合并探测。不同后端可以使用完全不同的端点和响应格式。Jellyfin/Emby 的共用探测器保留已验证的代理前缀、重定向入口和 CORS 兼容逻辑，登录和写操作不自动重放。
+
+`new MediaServerApi(...)` 和旧 `jellyfin.ts` 导出保留构造调用兼容，新代码使用 `createServerApi({ address, protocol, ... })`。`npm run test:servers` 包含第三连接器注入回归：仅增加注册项就能通过完整应用类型检查，并以独立本地端点验证探测、登录、缓存重建、标识设置和 React 界面集成；测试后端不进入生产包。
 
 ## 构建
 

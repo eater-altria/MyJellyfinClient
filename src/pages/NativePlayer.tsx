@@ -1,3 +1,4 @@
+import { getServerConnector } from '../api/mediaServer';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
@@ -218,13 +219,13 @@ export default function NativePlayer() {
         }
         latestPos.position = startTicks / 10_000_000;
 
-        // Preserve Jellyfin's fast path; Emby negotiates a profile and session before streaming.
+        // Connectors can require a negotiated profile/session before native streaming.
         let source = it.MediaSources?.[0];
         let container = (source?.Container || '').toLowerCase();
         let directOk = !!source && source.SupportsDirectPlay && !['iso', 'm2ts'].includes(container);
         let playSessionId: string | undefined;
 
-        if (!directOk || api.protocol === 'emby') {
+        if (!directOk || getServerConnector(api.protocol).requiresNativePlaybackInfo) {
           stage = 'playback-info';
           trace.record('playback-info.request', { protocol: api.protocol });
           const info = await api.getPlaybackInfo(itemId, 'native', controller.signal);

@@ -3,7 +3,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const esbuild = require('esbuild');
 
+const connectorMetadata = require('./source-bundle.cjs')('src/api/mediaServer.ts');
+
 function load(file, imports = {}) {
+  if (file === 'src/components/AddServerDialog.tsx') {
+    imports['../api/mediaServer'] = { ...connectorMetadata, ...imports['../api/mediaServer'] };
+    imports['./ServerIcon'] = { __esModule: true, default: 'Icon' };
+  }
   const code = esbuild.transformSync(fs.readFileSync(file, 'utf8'), {
     loader: file.endsWith('.tsx') ? 'tsx' : 'ts', format: 'cjs', jsx: 'automatic',
   }).code;

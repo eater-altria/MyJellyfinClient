@@ -1,3 +1,4 @@
+import { serverProtocolName } from '../api/mediaServer';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ApiError, BaseItem, MediaServerApi, libraryItemTypes, type LibraryFilterOptions } from '../api/mediaServer';
@@ -163,7 +164,7 @@ export default function LibraryPage() {
     api.getLibraryFilters(libraryId, includeItemTypes, controller.signal).then(value => {
       if (!controller.signal.aborted) { loadedFacets.current = key; setFacets(value); setFacetsLoading(false); }
     }).catch(error => { if (!controller.signal.aborted) {
-      const product = api.protocol === 'emby' ? 'Emby' : 'Jellyfin';
+      const product = serverProtocolName(api.protocol);
       setFacetsError(error instanceof ApiError ? `${product} 筛选选项加载失败（HTTP ${error.status}）`
         : `${product} 筛选选项加载失败，请检查连接后重试`);
       setFacetsLoading(false);

@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useServers, type SavedServer } from '../store/servers';
-import { formatRelativeDate, serverProtocolName } from '../api/mediaServer';
+import { formatRelativeDate, serverProtocolName, supportedServerNames } from '../api/mediaServer';
 import { EmptyState } from '../components/Feedback';
+import ServerIcon from '../components/ServerIcon';
 import AddServerDialog from '../components/AddServerDialog';
-import { IconClose, IconJellyfin, IconEmby, IconLibrary, IconMore, IconPlus, IconServer, IconVideo } from '../components/icons';
+import { IconClose, IconLibrary, IconMore, IconPlus, IconServer, IconVideo } from '../components/icons';
+import { useServerReorder } from '../hooks/useServerReorder';
+import ServerReorderFeedback from '../components/ServerReorderFeedback';
 
 /** /servers — saved connections and server management. */
 export default function ServersPage() {
@@ -15,6 +18,7 @@ export default function ServersPage() {
   const refreshServer = useServers((s) => s.refreshServer);
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<SavedServer | null>(null);
+  const reorder = useServerReorder('grid');
 
   // Refresh every server on mount (fire and forget)
   useEffect(() => {
@@ -47,7 +51,7 @@ export default function ServersPage() {
         <EmptyState
           icon={<IconServer size={56} />}
           title="还没有服务器"
-          hint="连接 Jellyfin 或 Emby，浏览你的电影、剧集与收藏。"
+          hint={`连接 ${supportedServerNames}，浏览你的电影、剧集与收藏。`}
         >
           <button
             onClick={() => setShowAdd(true)}
@@ -58,22 +62,24 @@ export default function ServersPage() {
           </button>
         </EmptyState>
       ) : (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(min(240px,100%),1fr))] gap-5">
+        <div data-server-reorder-list="grid" className="grid grid-cols-[repeat(auto-fill,minmax(min(240px,100%),1fr))] gap-5">
           {servers.map((s) => {
             const online = reachability[s.id]?.address === s.address && reachability[s.id]?.reachable;
             return (
               <div
                 key={s.id}
+                {...reorder.itemProps(s.id)}
                 onContextMenu={(event) => { event.preventDefault(); setEditing(s); }}
-                className="glass-surface group relative min-w-0 transition-shadow hover:shadow-card-hover"
+                className="glass-surface server-sort-item group relative min-w-0 transition-shadow hover:shadow-card-hover"
               >
                 <button
                   onClick={() => { useServers.getState().setActive(s.id); navigate(`/server/${s.id}`); }}
                   aria-label={`打开服务器 ${s.name}`}
+                  aria-describedby={reorder.instructionId}
                   className="flex min-h-[200px] w-full min-w-0 flex-col rounded-[24px] p-5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
                 >
                   <div className="mb-4 flex h-11 items-center">
-                    {s.protocol === 'emby' ? <IconEmby size={40} /> : <IconJellyfin size={40} />}
+                    <ServerIcon protocol={s.protocol} size={40} />
                     {online && (
                       <span className="ml-3 inline-flex items-center gap-1.5 text-[11px] text-text-secondary">
                         <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
@@ -100,6 +106,7 @@ export default function ServersPage() {
                   </div>
                 </button>
                 <button
+                  data-server-reorder-ignore
                   onClick={() => setEditing(s)}
                   className="glass-icon-button absolute right-4 top-4 h-7 min-h-0 w-7 text-text-secondary"
                   aria-label={`编辑服务器 ${s.name}`}
@@ -108,6 +115,7 @@ export default function ServersPage() {
                   <IconMore size={16} />
                 </button>
                 <button
+                  data-server-reorder-ignore
                   onClick={(e) => {
                     e.stopPropagation();
                     if (window.confirm('确定删除该服务器？')) removeServer(s.id);
@@ -124,6 +132,7 @@ export default function ServersPage() {
 
           {/* Add card */}
           <button
+            data-server-reorder-ignore
             onClick={() => setShowAdd(true)}
             className="glass-surface flex min-h-[200px] flex-col items-center justify-center gap-3 text-text-secondary transition-colors hover:bg-white/70 hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
           >
@@ -133,6 +142,7 @@ export default function ServersPage() {
         </div>
       )}
 
+      <ServerReorderFeedback instructionId={reorder.instructionId} />
       {showAdd && <AddServerDialog onClose={() => setShowAdd(false)} />}
       {editing && <AddServerDialog key={editing.id} server={editing} onClose={() => setEditing(null)} />}
     </div>

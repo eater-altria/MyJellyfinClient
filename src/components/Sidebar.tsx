@@ -1,13 +1,15 @@
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 import { useServers, type SavedServer } from '../store/servers';
+import { serverProtocolName } from '../api/mediaServer';
+import ServerIcon from './ServerIcon';
 import AddServerDialog from './AddServerDialog';
 import LiquidGlass from './LiquidGlass';
+import { useServerReorder } from '../hooks/useServerReorder';
+import ServerReorderFeedback from './ServerReorderFeedback';
 import {
   IconFolder,
   IconHistory,
-  IconJellyfin,
-  IconEmby,
   IconSearch,
   IconServer,
   IconSettings,
@@ -30,6 +32,7 @@ export default function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
   const [editing, setEditing] = useState<SavedServer | null>(null);
+  const reorder = useServerReorder('sidebar');
 
   return (
     <aside className="app-sidebar flex shrink-0 flex-col" aria-label="主导航">
@@ -59,24 +62,25 @@ export default function Sidebar() {
       </nav>
 
       {servers.length > 0 && (
-        <div className="mt-7 min-h-0 overflow-y-auto">
+        <div data-server-reorder-list="sidebar" className="mt-7 min-h-0 overflow-y-auto">
           <div className="sidebar-label px-3 pb-2 text-[10px] font-semibold tracking-wider text-text-secondary">已连接的服务器</div>
           <div className="flex flex-col gap-1.5">
             {servers.map((s) => (
               <button
                 key={s.id}
+                {...reorder.itemProps(s.id)}
                 onClick={() => { useServers.getState().setActive(s.id); navigate(`/server/${s.id}`); }}
                 onContextMenu={(event) => { event.preventDefault(); setEditing(s); }}
-                title={`${s.name} · ${s.protocol === 'emby' ? 'Emby' : 'Jellyfin'} · 右键编辑`}
-                className={`sidebar-link flex items-center gap-3 rounded-full px-3 py-2.5 text-left text-[13px] transition-colors ${
+                title={`${s.name} · ${serverProtocolName(s.protocol)} · 拖动排序 · 右键编辑`}
+                className={`sidebar-link server-sort-item flex items-center gap-3 rounded-full px-3 py-2.5 text-left text-[13px] transition-colors ${
                   location.pathname.startsWith(`/server/${s.id}`)
                     ? 'sidebar-link-active font-semibold text-accent'
                     : 'text-text-primary'
                 }`}
-                aria-label={`${s.name} · ${s.protocol === 'emby' ? 'Emby' : 'Jellyfin'}`}
+                aria-label={`${s.name} · ${serverProtocolName(s.protocol)}`}
                 aria-current={location.pathname.startsWith(`/server/${s.id}`) ? 'page' : undefined}
               >
-                {s.protocol === 'emby' ? <IconEmby size={20} className="shrink-0" /> : <IconJellyfin size={20} className="shrink-0" />}
+                <ServerIcon protocol={s.protocol} size={20} className="shrink-0" />
                 <span className="sidebar-label truncate">{s.name}</span>
                 {reachability[s.id]?.address === s.address && reachability[s.id]?.reachable && (
                   <span role="img" aria-label="服务器可达" title="服务器可达" className="sidebar-status ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-[#28c840]" />
@@ -89,6 +93,7 @@ export default function Sidebar() {
 
       <div className="flex-1" />
       </LiquidGlass>
+      <ServerReorderFeedback instructionId={reorder.instructionId} />
       {editing && <AddServerDialog key={editing.id} server={editing} onClose={() => setEditing(null)} />}
     </aside>
   );

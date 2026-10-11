@@ -185,7 +185,7 @@ export const useSettings = create<SettingsState>()(
 );
 
 /** Read at request time so cached API instances immediately use saved overrides. */
-export const getClientIdentity = (protocol: ClientIdentityProtocol) => resolveClientIdentity(useSettings.getState().clientIdentities[protocol]);
+export const getClientIdentity = (protocol: ClientIdentityProtocol) => resolveClientIdentity(useSettings.getState().clientIdentities[protocol] ?? {});
 
 /** Apply accent color CSS variables to :root. */
 export function applyAccent(color: string) {

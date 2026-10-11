@@ -1,8 +1,9 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useBrowseActivity } from '../hooks/useBrowseActivity';
 import { useServers, ServerRegistrationError, type SavedServer } from '../store/servers';
-import { ApiError, serverProtocolName, type ServerProtocol } from '../api/mediaServer';
-import { IconClose, IconJellyfin, IconEmby } from './icons';
+import { ApiError, serverProtocolName, availableServerConnectors, getServerConnector, DEFAULT_SERVER_PROTOCOL, supportedServerNames, type ServerProtocol } from '../api/mediaServer';
+import { IconClose } from './icons';
+import ServerIcon from './ServerIcon';
 import { ServerDetectionError } from '../api/detectServer';
 import LiquidGlass from './LiquidGlass';
 import { getClientIdentity } from '../store/settings';
@@ -18,7 +19,7 @@ function errorMessage(e: unknown): string {
   return '无法连接服务器，请检查地址和网络';
 }
 
-/** Modal dialog for adding or editing a Jellyfin / Emby server. */
+/** Modal dialog for adding or editing a registered backend connection. */
 export default function AddServerDialog({ onClose, server }: { onClose: () => void; server?: SavedServer }) {
   const active = useBrowseActivity();
   const addServer = useServers((s) => s.addServer);
@@ -27,9 +28,9 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
   const [address, setAddress] = useState(server?.address ?? '');
   const [username, setUsername] = useState(server?.userName ?? '');
   const [password, setPassword] = useState('');
-  const [protocol, setProtocol] = useState<ServerProtocol>(server?.protocol ?? 'jellyfin');
+  const [protocol, setProtocol] = useState<ServerProtocol>(server?.protocol ?? DEFAULT_SERVER_PROTOCOL);
   const [registerNewDevice, setRegisterNewDevice] = useState(false);
-  const [clientName, setClientName] = useState(server?.clientName ?? getClientIdentity('emby').name);
+  const [clientName, setClientName] = useState(server?.clientName ?? getClientIdentity(server?.protocol ?? DEFAULT_SERVER_PROTOCOL).name);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [connectionStatus, setConnectionStatus] = useState('');
@@ -66,6 +67,7 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
     return () => window.removeEventListener('keydown', handleKey);
   }, [loading, onClose, active]);
 
+  const supportsDeviceRegistration = getServerConnector(protocol).supportsDeviceRegistration;
   const canSubmit = address.trim() !== '' && username.trim() !== '' && !loading;
 
   const submit = async () => {
@@ -76,8 +78,8 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
     const onDetected = () => setConnectionStatus(`正在登录 ${serverProtocolName(protocol)}…`);
     try {
       if (server) await updateServer(server.id, { name, address: address.trim(), username: username.trim(),
-        password: registerNewDevice && protocol === 'emby' ? password : password || undefined, protocol, onDetected,
-        registerNewDevice: registerNewDevice && protocol === 'emby' ? { clientName } : undefined });
+        password: registerNewDevice && supportsDeviceRegistration ? password : password || undefined, protocol, onDetected,
+        registerNewDevice: registerNewDevice && supportsDeviceRegistration ? { clientName } : undefined });
       else await addServer(address.trim(), username.trim(), password, name, onDetected, protocol);
       onClose();
     } catch (e) {
@@ -106,10 +108,10 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
         <div className="max-h-[calc(100dvh-32px)] overflow-y-auto p-7">
         <div className="mb-6 flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            {protocol === 'emby' ? <IconEmby size={36} /> : <IconJellyfin size={36} />}
+            <ServerIcon protocol={protocol} size={36} />
             <div className="min-w-0">
               <h2 id={`${formId}-title`} className="text-[20px] font-semibold tracking-tight text-text-primary">{server ? '编辑服务器' : '添加服务器'}</h2>
-              <p className="mt-1 text-[12px] text-text-secondary">连接你的 Jellyfin 或 Emby 媒体库</p>
+              <p className="mt-1 text-[12px] text-text-secondary">连接你的 {supportedServerNames} 媒体库</p>
             </div>
           </div>
           <button
@@ -135,10 +137,13 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
           </div>
           <fieldset disabled={loading}>
             <legend className="mb-1.5 px-1 text-[12px] font-medium text-text-secondary">服务器类型</legend>
-            <div className="flex gap-3">
-              {(['jellyfin', 'emby'] as const).map(value => (
+            <div className="flex flex-wrap gap-3">
+              {availableServerConnectors.map(({ id: value }) => (
                 <label key={value} className="glass-input flex flex-1 cursor-pointer items-center gap-2 rounded-2xl px-4 py-3 text-[13px] text-text-primary">
-                  <input type="radio" name={`${formId}-protocol`} value={value} checked={protocol === value} onChange={() => setProtocol(value)} />
+                  <input type="radio" name={`${formId}-protocol`} value={value} checked={protocol === value} onChange={() => {
+                    setProtocol(value);
+                    if (!registerNewDevice) setClientName(server?.clientName ?? getClientIdentity(value).name);
+                  }} />
                   {serverProtocolName(value)}
                 </label>
               ))}
@@ -172,13 +177,13 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
               autoComplete="current-password"
               className={inputCls}
               type="password"
-              placeholder={registerNewDevice && protocol === 'emby' ? '重新登录的密码；无密码账号可留空' : server ? '留空保留登录；更换类型、地址或用户需重新认证' : '密码（可留空）'}
+              placeholder={registerNewDevice && supportsDeviceRegistration ? '重新登录的密码；无密码账号可留空' : server ? '留空保留登录；更换类型、地址或用户需重新认证' : '密码（可留空）'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
           </div>
 
-          {server && protocol === 'emby' && (
+          {server && supportsDeviceRegistration && (
             <div className="rounded-2xl bg-white/30 p-3">
               <label className="flex items-center gap-2 text-[12px] font-medium text-text-primary">
                 <input type="checkbox" disabled={loading} checked={registerNewDevice} onChange={e => setRegisterNewDevice(e.target.checked)} />
