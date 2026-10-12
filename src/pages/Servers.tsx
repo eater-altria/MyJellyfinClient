@@ -3,9 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { useServers, type SavedServer } from '../store/servers';
 import { formatRelativeDate, serverProtocolName, supportedServerNames } from '../api/mediaServer';
 import { EmptyState } from '../components/Feedback';
+import { contextMenuProps } from '../components/ContextMenu';
 import ServerIcon from '../components/ServerIcon';
 import AddServerDialog from '../components/AddServerDialog';
-import { IconClose, IconLibrary, IconMore, IconPlus, IconServer, IconVideo } from '../components/icons';
+import { IconTrash, IconLibrary, IconEdit, IconPlus, IconServer, IconVideo } from '../components/icons';
 import { useServerReorder } from '../hooks/useServerReorder';
 import ServerReorderFeedback from '../components/ServerReorderFeedback';
 
@@ -69,7 +70,10 @@ export default function ServersPage() {
               <div
                 key={s.id}
                 {...reorder.itemProps(s.id)}
-                onContextMenu={(event) => { event.preventDefault(); setEditing(s); }}
+                {...contextMenuProps([
+                  { label: '编辑服务器', icon: <IconEdit size={16} />, run: () => setEditing(s) },
+                  { label: '删除服务器', icon: <IconTrash size={16} />, danger: true, run: () => { if (window.confirm('确定删除该服务器？')) removeServer(s.id); } },
+                ])}
                 className="glass-surface server-sort-item group relative min-w-0 transition-shadow hover:shadow-card-hover"
               >
                 <button
@@ -104,27 +108,6 @@ export default function ServersPage() {
                     <span className="glass-badge">{serverProtocolName(s.protocol)}</span>
                     <span>{formatRelativeDate(s.lastConnected)}</span>
                   </div>
-                </button>
-                <button
-                  data-server-reorder-ignore
-                  onClick={() => setEditing(s)}
-                  className="glass-icon-button absolute right-4 top-4 h-7 min-h-0 w-7 text-text-secondary"
-                  aria-label={`编辑服务器 ${s.name}`}
-                  title="编辑服务器"
-                >
-                  <IconMore size={16} />
-                </button>
-                <button
-                  data-server-reorder-ignore
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (window.confirm('确定删除该服务器？')) removeServer(s.id);
-                  }}
-                  className="glass-icon-button pointer-events-none absolute right-4 top-12 z-10 flex h-7 min-h-0 w-7 items-center justify-center text-text-secondary opacity-0 transition-opacity hover:!text-red-600 focus-visible:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
-                  title="删除服务器"
-                  aria-label={`删除服务器 ${s.name}`}
-                >
-                  <IconClose size={11} />
                 </button>
               </div>
             );

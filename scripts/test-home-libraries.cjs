@@ -6,7 +6,7 @@ function load(file, imports = {}) {
   if (['src/api/mediaServer.ts', 'src/utils/clientIdentity.ts'].includes(file)) return require('./source-bundle.cjs')(file);
   const code = esbuild.transformSync(fs.readFileSync(file, 'utf8'), { loader: file.endsWith('.tsx') ? 'tsx' : 'ts', format: 'cjs', jsx: 'automatic' }).code;
   const module = {exports:{}};
-  new Function('require','module','exports',code)(name => imports[name] ?? (name === '../hooks/useBrowseActivity' ? { useBrowseActivity: () => true } : name === '../hooks/useAutoPagination' ? { useAutoPagination: () => ({current:null}) } : name === '../utils/browseHistory' ? load('src/utils/browseHistory.ts') : name === '../utils/libraryFilters' ? load('src/utils/libraryFilters.ts') : name === '../components/LibraryFilterDialog' ? {default:'FilterDialog'} : require(name)),module,module.exports);
+  new Function('require','module','exports',code)(name => imports[name] ?? (name === '../hooks/useMediaContextMenu' ? require('./source-bundle.cjs')('src/hooks/useMediaContextMenu.tsx') : name === '../hooks/useBrowseActivity' ? { useBrowseActivity: () => true } : name === '../hooks/useAutoPagination' ? { useAutoPagination: () => ({current:null}) } : name === '../utils/browseHistory' ? load('src/utils/browseHistory.ts') : name === '../utils/libraryFilters' ? load('src/utils/libraryFilters.ts') : name === '../components/LibraryFilterDialog' ? {default:'FilterDialog'} : require(name)),module,module.exports);
   return module.exports;
 }
 const identity = load('src/utils/clientIdentity.ts', { './defaultClientIdentity.json': require('../src/utils/defaultClientIdentity.json') });

@@ -23,6 +23,7 @@ let child, socket;
     import {flushSync} from 'react-dom';
     import {MemoryRouter,useLocation,useNavigate} from 'react-router-dom';
     import Sidebar from './src/components/Sidebar';
+    import ContextMenuHost from './src/components/ContextMenu';
     import Servers from './src/pages/Servers';
     import {BrowseActivity} from './src/hooks/useBrowseActivity';
     import {useServers} from './src/store/servers';
@@ -43,7 +44,7 @@ let child, socket;
     }
     const root=createRoot(document.getElementById('root'));
     const state=()=>useServers.getState();
-    const render=()=>flushSync(()=>root.render(<React.StrictMode><MemoryRouter initialEntries={['/servers']}><Shell/></MemoryRouter></React.StrictMode>));
+    const render=()=>flushSync(()=>root.render(<React.StrictMode><MemoryRouter initialEntries={['/servers']}><ContextMenuHost/><Shell/></MemoryRouter></React.StrictMode>));
     const element=(surface,id)=>document.querySelector('[data-server-reorder-surface="'+surface+'"][data-server-reorder-id="'+id+'"]');
     const snapshot=()=>({
       grid:[...document.querySelectorAll('[data-server-reorder-surface="grid"]')].map(node=>node.dataset.serverReorderId),
@@ -70,6 +71,7 @@ let child, socket;
         return {x:surface==='grid'&&placement!=='center'?(placement==='before'?rect.left+24:rect.right-24):rect.left+rect.width/2,
           y:surface==='sidebar'&&placement!=='center'?(placement==='before'?rect.top+6:rect.bottom-6):rect.top+rect.height/2};
       },
+      menuPoint(label){const rect=[...document.querySelectorAll('[role="menuitem"]')].find(node=>node.textContent===label).getBoundingClientRect();return {x:rect.left+rect.width/2,y:rect.top+rect.height/2};},
       control(id,action){const rect=element('grid',id).querySelector('[aria-label="'+action+'服务器 '+originals.find(s=>s.id===id).name+'"]').getBoundingClientRect();return {x:rect.left+rect.width/2,y:rect.top+rect.height/2};},
       capture(surface,id){return element(surface,id).hasPointerCapture(1);},
       focus(surface,id){const node=element(surface,id);(surface==='grid'?node.querySelector('button'):node).focus();},
@@ -150,9 +152,24 @@ let child, socket;
     end=await drag('grid','s1','s0','before');await up({x:width-2,y:height-2});await order(['s0','s3','s2','s1'],'Outside drop');
     await fixture('refresh()');await order(['s0','s3','s2','s1'],'Metadata refresh');
     await fixture('saveCopy()');await fixture('rehydrate()');await order(['s0','s3','s2','s1'],'Hydration persistence');
-    const editPoint=await fixture('control("s0","编辑")');await down(editPoint);await up(editPoint);await wait(40);
-    assert(await evaluate('!!document.querySelector("[role=dialog]")'),'Edit button retains native click');
+    const editPoint=await fixture('point("grid","s0")');
+    await mouse('mousePressed',editPoint,{button:'right',buttons:2,clickCount:1});
+    await mouse('mouseReleased',editPoint,{button:'right',buttons:0,clickCount:1});await wait(40);
+    await evaluate('[...document.querySelectorAll("[role=menuitem]")].find(button=>button.textContent.includes("编辑服务器")).click()');await wait(40);
+    assert(await evaluate('!!document.querySelector("[role=dialog]")'),'Server context menu opens edit dialog');
     await key('Escape','Escape');await wait(40);
+    await mouse('mousePressed',editPoint,{button:'right',buttons:2,clickCount:1});
+    await mouse('mouseReleased',editPoint,{button:'right',buttons:0,clickCount:1});await wait(40);
+    await evaluate('window.confirm=()=>false');
+    let deletePoint=await fixture('menuPoint("删除服务器")');await down(deletePoint);await up(deletePoint);await wait(40);
+    await order(['s0','s3','s2','s1'],'Cancelled context delete');
+    await mouse('mousePressed',editPoint,{button:'right',buttons:2,clickCount:1});
+    await mouse('mouseReleased',editPoint,{button:'right',buttons:0,clickCount:1});await wait(40);
+    await evaluate('window.confirm=()=>true');
+    deletePoint=await fixture('menuPoint("删除服务器")');await down(deletePoint);await up(deletePoint);await wait(40);
+    await order(['s3','s2','s1'],'Confirmed context delete');
+    assert.equal(await evaluate('!!document.querySelector("[role=menu]")'),false,'Deleting its source must dismiss the menu');
+    await reset();
     const ordinary=await fixture('point("grid","s0")');await down(ordinary);await move({x:ordinary.x+2,y:ordinary.y+1});await up(ordinary);await wait(40);
     assert.equal((await snapshot()).route,'/server/s0','Subthreshold motion remains a normal navigation click');
     await reset();

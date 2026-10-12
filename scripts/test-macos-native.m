@@ -19,6 +19,7 @@ extern void mjc_macos_capture(void *,const char *,bool);
 @property BOOL ready;
 @property int result;
 @property BOOL captureSucceeded;
+@property BOOL cacheVerified;
 @end
 static void delay(double seconds,dispatch_block_t block) { dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(seconds*NSEC_PER_SEC)),dispatch_get_main_queue(),block); }
 static void command(Regression *test,NSArray *args) {
@@ -42,6 +43,10 @@ static bool received(void *ctx,const char *name,const char *payload) {
         NSDictionary *value=[NSJSONSerialization JSONObjectWithData:[[NSString stringWithUTF8String:payload] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:NULL];
         test.captureSucceeded=[value[@"success"] boolValue];
         printf("Capture: %s\n",payload);
+    }
+    if(strcmp(name,"message")==0) {
+        NSArray *args=[NSJSONSerialization JSONObjectWithData:[[NSString stringWithUTF8String:payload] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:NULL];
+        if([args isKindOfClass:NSArray.class] && args.count>1 && [args[0] isEqual:@"mjc-test-cache"]) test.cacheVerified=[args[1] isEqual:@"yes"];
     }
     return true;
 }
@@ -76,11 +81,18 @@ static bool received(void *ctx,const char *name,const char *payload) {
 }
 - (void)verify {
     if(!self.ready) { delay(0.25,^{[self verify];});return; }
+    // The probe runs on mpv's Lua thread; never synchronously query libmpv on the render/UI thread.
+    NSString *probe=[self.output stringByAppendingPathComponent:@"cache-probe.lua"];
+    NSString *lua=@"local mp=require 'mp'; mp.add_periodic_timer(0.1,function() local s=mp.get_property_native('demuxer-cache-state',{}); if mp.get_property('options/cache')=='yes' and type(s['seekable-ranges'])=='table' and #s['seekable-ranges']>0 then mp.commandv('script-message','mjc-test-cache','yes') end end)";
+    [lua writeToFile:probe atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    command(self,@[@"load-script",probe]);
     command(self,@[@"set",@"pause",@"yes"]);
     command(self,@[@"seek",@"1",@"absolute+exact"]);
     command(self,@[@"script-message",@"mjc-pointer",@"move",@"100",@"530"]);
     delay(0.5,^{
         NSOpenGLView *view=(__bridge NSOpenGLView *)self.view;
+        if(!self.cacheVerified) {fprintf(stderr,"FAIL explicit cache and real seekable ranges\n");self.result=1;[NSApp terminate:nil];return;}
+        printf("PASS explicit macOS cache and real demuxer seekable ranges\n");
         NSDictionary *glass=[view valueForKey:@"glassValues"];
         if([glass[@"surface_count"] intValue]<1) {fprintf(stderr,"FAIL no OSC glass geometry\n");self.result=1;[NSApp terminate:nil];return;}
         command(self,@[@"set",@"glsl-shaders",@""]);

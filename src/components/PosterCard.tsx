@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { MediaServerApi, BaseItem, formatTime } from '../api/mediaServer';
 import { useSettings } from '../store/settings';
 import { isNewMedia, mediaHdrLabel, mediaListMetadata, mediaPreviewUrls, mediaVideoStream } from '../utils/listPresentation';
-import { IconPlay } from './icons';
+import { subscribeBrowseUserData } from '../utils/browseHistory';
+import { contextMenuProps } from './ContextMenu';
+import { IconCheck, IconStar, IconPlay } from './icons';
 
 /** Poster card (2:3) for movies/series; thumb card (16:9) for episodes/resume items. */
 export default function PosterCard({
@@ -15,6 +17,7 @@ export default function PosterCard({
   label,
   description,
   showRating,
+  contextActions,
 }: {
   api: MediaServerApi;
   item: BaseItem;
@@ -26,19 +29,25 @@ export default function PosterCard({
   label?: string;
   description?: string;
   showRating?: boolean;
+  contextActions?: ReturnType<typeof contextMenuProps>;
 }) {
   const settings = useSettings();
+  const [userData, setUserData] = useState(item.UserData);
+  useEffect(() => setUserData(item.UserData), [api, item]);
+  useEffect(() => subscribeBrowseUserData((owner, id, fields) => {
+    if (owner === api && id === item.Id) setUserData(previous => ({ ...previous, ...fields }));
+  }), [api, item.Id]);
   const [failedImages, setFailedImages] = useState<string[]>([]);
   const previews = mediaPreviewUrls(api, item, settings, !!landscape);
   const img = [previews.primary, previews.fallback].find((url) => url && !failedImages.includes(url));
   const metadata = mediaListMetadata(item, settings);
   const hdr = settings.showHdrBadge ? mediaHdrLabel(mediaVideoStream(item)) : '';
   const runtime = item.RunTimeTicks ?? item.MediaSources?.[0]?.RunTimeTicks;
-  const position = item.UserData?.PlaybackPositionTicks ?? 0;
+  const position = userData?.PlaybackPositionTicks ?? 0;
   const pct =
     progress ??
-    (item.UserData?.PlayedPercentage && item.UserData.PlayedPercentage > 0
-      ? item.UserData.PlayedPercentage
+    (userData?.PlayedPercentage && userData.PlayedPercentage > 0
+      ? userData.PlayedPercentage
       : runtime && runtime > 0 && position > 0 ? position / runtime * 100 : null);
 
   const w = landscape ? Math.round(width * (16 / 9)) : width;
@@ -58,7 +67,9 @@ export default function PosterCard({
 
   return (
     <button
+      {...contextActions}
       onClick={onClick}
+      type="button"
       className="media-card group shrink-0 rounded-[20px] text-left"
       style={{ width: w }}
       title={item.Name}
@@ -90,7 +101,7 @@ export default function PosterCard({
           </div>
         )}
 
-        {landscape && remainingSec != null && remainingSec > 0 && (
+        {landscape && !userData?.Played && remainingSec != null && remainingSec > 0 && (
           <span className="glass-badge glass-dark absolute bottom-2 right-2 text-[10px] text-white">
             剩余 {formatTime(remainingSec)}
           </span>
@@ -102,19 +113,24 @@ export default function PosterCard({
           </div>
         )}
 
-        {settings.showNewBadge && isNewMedia(item) && (
-          <span title="最近 7 天添加且未播放" className="glass-badge absolute left-2 top-2 bg-accent text-[10px] font-semibold text-white">New</span>
+        {settings.showNewBadge && isNewMedia({ ...item, UserData: userData }) && (
+          <span title="最近 7 天添加且未播放" className={`glass-badge absolute top-2 bg-accent text-[10px] font-semibold text-white ${userData?.IsFavorite ? 'left-10' : 'left-2'}`}>New</span>
         )}
 
         {hdr && <span className="glass-badge glass-dark absolute bottom-2 left-2 text-[10px] text-white">{hdr}</span>}
 
-        {showRating && item.CommunityRating != null && item.CommunityRating > 0 && !item.UserData?.Played && (
+        {showRating && item.CommunityRating != null && item.CommunityRating > 0 && !userData?.Played && (
           <span className="glass-badge glass-dark absolute right-2 top-2 text-[10px] text-white">★{item.CommunityRating.toFixed(1)}</span>
         )}
 
-        {item.UserData?.Played && (
-          <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-accent p-1 text-white shadow-sm ring-1 ring-white/50">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round"><path d="m4 12.5 5 5L20 6.5" /></svg>
+        {userData?.IsFavorite && (
+          <span role="img" aria-label="已收藏" title="已收藏" className="glass-badge glass-dark absolute left-2 top-2 flex h-6 w-6 items-center justify-center !rounded-full !p-0 text-white">
+            <IconStar size={13} />
+          </span>
+        )}
+        {userData?.Played && (
+          <span role="img" aria-label="已观看" title="已观看" className="glass-badge glass-dark absolute bottom-2 right-2 flex h-6 w-6 items-center justify-center !rounded-full !p-0 text-white">
+            <IconCheck size={14} />
           </span>
         )}
       </div>

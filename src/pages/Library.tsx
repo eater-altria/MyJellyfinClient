@@ -12,6 +12,7 @@ import { useSettings } from '../store/settings';
 import { useLibraryPreferences } from '../store/libraryPreferences';
 import { DEFAULT_LIBRARY_SORT, LIBRARY_SORT_OPTIONS, librarySortScope } from '../utils/librarySort';
 import { mediaFolderDate, mediaSortParams, orderMediaItems } from '../utils/listPresentation';
+import { mediaContextMenuProps } from '../hooks/useMediaContextMenu';
 import PosterCard from '../components/PosterCard';
 import LiquidGlass from '../components/LiquidGlass';
 import LibrarySortMenu from '../components/LibrarySortMenu';
@@ -313,6 +314,7 @@ export default function LibraryPage() {
                 key={item.Id}
                 api={api}
                 item={item}
+                contextActions={mediaContextMenuProps(api, item)}
                 width={140}
                 onClick={() => navigate(detailRoute(item))}
               />

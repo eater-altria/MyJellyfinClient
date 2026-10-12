@@ -1,5 +1,6 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useEffect } from 'react';
+import ContextMenuHost from './components/ContextMenu';
 import Sidebar from './components/Sidebar';
 import TitleBar from './components/TitleBar';
 import WindowResizeHandles from './components/WindowResizeHandles';
@@ -34,6 +35,7 @@ export default function App() {
   return (
     <div className={`${isPlayer ? 'bg-black' : 'app-shell'} ${isMacOSTauri ? 'macos-window relative' : ''} flex h-full flex-col`}>
       {!isPlayer && <AppBackdrop />}
+      <ContextMenuHost />
       <TitleBar dark={isPlayer} />
       {isPlayer && !isMacOSTauri && <WindowResizeHandles />}
       <div className={`${isPlayer ? '' : 'app-workspace'} flex min-h-0 flex-1`}>

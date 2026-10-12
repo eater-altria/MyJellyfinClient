@@ -112,7 +112,7 @@ static NSString *keyName(NSEvent *event) {
     NSUInteger cache=[settings[@"playerCacheSizeMB"] unsignedIntegerValue];
     if(cache<1 || cache>8192) cache=150;
     NSMutableDictionary *opts=[@{@"config":@"no", @"load-scripts":@"no", @"vo":@"libmpv", @"osc":@"no",
-        @"terminal":@"no", @"idle":@"yes", @"keep-open":@"yes", @"tls-verify":@"yes", @"tls-ca-file":caPath, @"osd-level":@"1",
+        @"terminal":@"no", @"idle":@"yes", @"keep-open":@"yes", @"cache":@"yes", @"tls-verify":@"yes", @"tls-ca-file":caPath, @"osd-level":@"1",
         @"target-trc":@"srgb", @"target-prim":@"bt.709", @"sub-font":@"PingFang SC",
         @"hwdec":[self.options[@"hw_decode"] boolValue]?@"auto-safe":@"no",
         @"volume-max":[self.options[@"audio_boost"] boolValue]?@"200":@"100",

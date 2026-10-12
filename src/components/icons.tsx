@@ -217,3 +217,6 @@ export const IconEmby = ({ size = 18, ...props }: P) => (
     <path d="M7.5 6.5h9v3h-6v1h5v3h-5v1h6v3h-9Z" fill="white" />
   </svg>
 );
+
+export const IconEdit = (p: P) => base(p, <><path d="m16 3 5 5-12 12-6 1 1-6Z" /><path d="m13 6 5 5" /></>);
+export const IconTrash = (p: P) => base(p, <><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" /></>);

@@ -1,9 +1,7 @@
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
-import { useServers, type SavedServer } from '../store/servers';
+import { useServers } from '../store/servers';
 import { serverProtocolName } from '../api/mediaServer';
 import ServerIcon from './ServerIcon';
-import AddServerDialog from './AddServerDialog';
 import LiquidGlass from './LiquidGlass';
 import { useServerReorder } from '../hooks/useServerReorder';
 import ServerReorderFeedback from './ServerReorderFeedback';
@@ -31,7 +29,6 @@ export default function Sidebar() {
   const reachability = useServers((s) => s.reachability);
   const navigate = useNavigate();
   const location = useLocation();
-  const [editing, setEditing] = useState<SavedServer | null>(null);
   const reorder = useServerReorder('sidebar');
 
   return (
@@ -70,8 +67,7 @@ export default function Sidebar() {
                 key={s.id}
                 {...reorder.itemProps(s.id)}
                 onClick={() => { useServers.getState().setActive(s.id); navigate(`/server/${s.id}`); }}
-                onContextMenu={(event) => { event.preventDefault(); setEditing(s); }}
-                title={`${s.name} · ${serverProtocolName(s.protocol)} · 拖动排序 · 右键编辑`}
+                title={`${s.name} · ${serverProtocolName(s.protocol)} · 拖动排序`}
                 className={`sidebar-link server-sort-item flex items-center gap-3 rounded-full px-3 py-2.5 text-left text-[13px] transition-colors ${
                   location.pathname.startsWith(`/server/${s.id}`)
                     ? 'sidebar-link-active font-semibold text-accent'
@@ -94,7 +90,6 @@ export default function Sidebar() {
       <div className="flex-1" />
       </LiquidGlass>
       <ServerReorderFeedback instructionId={reorder.instructionId} />
-      {editing && <AddServerDialog key={editing.id} server={editing} onClose={() => setEditing(null)} />}
     </aside>
   );
 }

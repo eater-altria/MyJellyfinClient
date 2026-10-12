@@ -6,6 +6,7 @@ import { useSettings } from '../store/settings';
 import { useAppBackdrop } from '../store/appBackdrop';
 import { mediaFolderDate, orderMediaItems } from '../utils/listPresentation';
 import SectionRow from '../components/SectionRow';
+import { mediaContextMenuProps } from '../hooks/useMediaContextMenu';
 import PosterCard from '../components/PosterCard';
 import HeroCarousel from '../components/HeroCarousel';
 import LiquidGlass from '../components/LiquidGlass';
@@ -273,7 +274,7 @@ function ServerHome({ serverId }: { serverId: string }) {
       ) : (
         <>
           {settings.showPreviewImage && <div>
-            <HeroCarousel api={api} items={heroItems} serverId={serverId} onCurrentItemChange={handleHeroChange} onRefresh={refreshLists} refreshing={refreshing} active={active} />
+            <HeroCarousel api={api} items={heroItems} serverId={serverId} contextActions={item => mediaContextMenuProps(api, item)} onCurrentItemChange={handleHeroChange} onRefresh={refreshLists} refreshing={refreshing} active={active} />
           </div>}
 
           {(views.length > 0 || !!resumeRow?.items.length || !!resumeRow?.error || !!nextRow?.items.length || !!nextRow?.error) && (
@@ -355,6 +356,7 @@ function ServerHome({ serverId }: { serverId: string }) {
                   key={item.Id}
                   api={api}
                   item={item}
+                  contextActions={mediaContextMenuProps(api, item)}
                   landscape
                   width={120}
                   onClick={() => resumeClick(item)}
@@ -372,6 +374,7 @@ function ServerHome({ serverId }: { serverId: string }) {
                   key={item.Id}
                   api={api}
                   item={item}
+                  contextActions={mediaContextMenuProps(api, item)}
                   landscape
                   width={120}
                   onClick={() => navigate(detailRoute(item))}
@@ -398,6 +401,7 @@ function ServerHome({ serverId }: { serverId: string }) {
                     key={item.Id}
                     api={api}
                     item={item}
+                    contextActions={mediaContextMenuProps(api, item)}
                     width={130}
                     onClick={() => navigate(detailRoute(item))}
                   />

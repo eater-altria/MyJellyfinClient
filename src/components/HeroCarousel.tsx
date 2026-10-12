@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MediaServerApi, BaseItem } from '../api/mediaServer';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconSearch } from './icons';
+import type { contextMenuProps } from './ContextMenu';
 import LiquidGlass from './LiquidGlass';
 
 /** Full-width cross-fading hero carousel fed by items with backdrops. */
@@ -10,6 +11,7 @@ export default function HeroCarousel({
   items,
   serverId,
   onCurrentItemChange,
+  contextActions,
   onRefresh,
   refreshing = false,
   active = true,
@@ -17,6 +19,7 @@ export default function HeroCarousel({
   api: MediaServerApi;
   items: BaseItem[];
   serverId: string;
+  contextActions?: (item: BaseItem) => ReturnType<typeof contextMenuProps>;
   onCurrentItemChange?: (item: BaseItem | null) => void;
   onRefresh?: () => void;
   refreshing?: boolean;
@@ -89,6 +92,7 @@ export default function HeroCarousel({
       })}
 
       <button
+        {...contextActions?.(current)}
         onClick={openDetail}
         aria-label={`查看${current.Name}详情`}
         className="absolute inset-0 rounded-[28px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-4px] focus-visible:outline-white"

@@ -89,6 +89,7 @@ const esbuild = require('esbuild');
       import { flushSync } from 'react-dom';
       import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
       import PageHost from './src/components/BrowsePageHost';
+      import ContextMenuHost from './src/components/ContextMenu';
       import NativePlayer from './src/pages/NativePlayer';
       import { BrowseActivity } from './src/hooks/useBrowseActivity';
       import { PLAYER_EXIT_EVENT } from './src/player/exitPlayback';
@@ -100,6 +101,7 @@ const esbuild = require('esbuild');
       const wait = (ms=70) => new Promise(resolve => setTimeout(resolve, ms));
       let navigate, searches=0, views=0, delayed=null, failMore=false, failFacets=false;
       const queries=[];
+      let favoriteWrites=0, watchedWrites=0, failUserData=false, releaseWrite;
       const nativeSignals=[];
       const artwork=color=>'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="440" height="240"><path fill="'+color+'" d="M0 0h440v240H0z"/></svg>');
       const libraryCover=artwork('#384e93'),memberPoster=artwork('#c18542');
@@ -110,7 +112,11 @@ const esbuild = require('esbuild');
       const homeViews=()=>Array.from({length:6},(_,i)=>({Id:'view-'+i,Name:'分类 '+i,CollectionType:'movies'}));
       const movies=Array.from({length:310}, (_,i)=>({Id:'movie-'+i, Name:'Movie '+String(i).padStart(3,'0'),Type:'Movie',
         ProductionYear:i%2?2024:2025,Genres:[i%2?'剧情':'动画'],Tags:[i%2?'标签 A':'标签 B'],UserData:{IsFavorite:i%3===0}}));
-      const api={userId:'user-a',protocol:'jellyfin',token:'fixture-only',baseUrl:'https://fixture.test',clientIdentity:()=>({name:'Fixture',version:'1.0',deviceName:'Fixture PC'}),
+      const api={
+        setFavorite:async(id,value)=>{favoriteWrites++;if(failUserData)throw Error('fixture');if(releaseWrite)await releaseWrite.promise;movies.find(item=>item.Id===id).UserData.IsFavorite=value;},
+        markPlayed:async(id)=>{watchedWrites++;movies.find(item=>item.Id===id).UserData.Played=true;},
+        markUnplayed:async(id)=>{watchedWrites++;movies.find(item=>item.Id===id).UserData.Played=false;},
+        userId:'user-a',protocol:'jellyfin',token:'fixture-only',baseUrl:'https://fixture.test',clientIdentity:()=>({name:'Fixture',version:'1.0',deviceName:'Fixture PC'}),
         posterUrl:item=>item.Id==='view-0'?libraryCover:item.Id==='view-2'?replacementCover:item.Type==='Movie'?memberPoster:null,
         thumbUrl:item=>item.Type==='Movie'?libraryCover:null,
         backdropUrl:item=>item.Type==='Movie'?libraryCover:null,logoUrl:()=>null,personImageUrl:()=>null,
@@ -130,7 +136,7 @@ const esbuild = require('esbuild');
           if(homeRevision&&view.Id==='view-0'&&start===0)list[0]={...list[0],Id:'fresh-item',Name:'Fresh fixture item'};
           return {Items:list,TotalRecordCount:310};
         },
-        getResumeItems:async()=>{if(homeItemsDelay)await homeItemsDelay.promise;return {Items:movies.slice(0,3),TotalRecordCount:3};},getNextUp:async()=>({Items:[],TotalRecordCount:0}),
+        getResumeItems:async()=>{if(homeItemsDelay)await homeItemsDelay.promise;return {Items:movies.slice(0,3),TotalRecordCount:3};},getNextUp:async()=>({Items:movies.slice(1,2),TotalRecordCount:1}),
         getLibraryFilters:async(parent,type,signal)=>{if(failFacets)throw Error('fixture');return {genres:['动画','剧情'],tags:['标签 A','标签 B'],years:[2025,2024]};},
         queryItems(params,signal){
           queries.push({...params,signal});
@@ -160,8 +166,35 @@ const esbuild = require('esbuild');
       const scroll=async(element,top,left=0)=>{element.scrollTop=top;element.scrollLeft=left;element.dispatchEvent(new Event('scroll',{bubbles:true}));await wait();};
       const back=async()=>{flushSync(()=>navigate(-1));await wait();};
       (async()=>{try{
-        flushSync(()=>root.render(<React.StrictMode><MemoryRouter initialEntries={['/server/fixture/library/movies']}><Navigation/><PageHost/></MemoryRouter></React.StrictMode>));
+        flushSync(()=>root.render(<React.StrictMode><MemoryRouter initialEntries={['/server/fixture/library/movies']}><Navigation/><ContextMenuHost/><PageHost/></MemoryRouter></React.StrictMode>));
         await wait(130);
+        const mediaCard=page().querySelector('button[title="Movie 001"]');
+        const openContext=async(card=mediaCard)=>{card.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:innerWidth-1,clientY:innerHeight-1}));await wait();};
+        await openContext();let menu=document.querySelector('[role="menu"]');
+        check(menu&&menu.contains(document.activeElement),'Context menu must focus its first action');
+        const contextBounds=menu.getBoundingClientRect();check(contextBounds.right<=innerWidth&&contextBounds.bottom<=innerHeight,'Context menu must fit the viewport at each DPI');
+        menu.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true}));
+        check(document.activeElement.textContent==='标记为已观看','Arrow keys must navigate menu actions');
+        menu.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await wait();
+        check(!document.querySelector('[role="menu"]')&&document.activeElement===mediaCard,'Escape must close and restore card focus');
+        mediaCard.dispatchEvent(new KeyboardEvent('keydown',{key:'F10',shiftKey:true,bubbles:true,cancelable:true}));await wait();
+        menu=document.querySelector('[role="menu"]');check(menu,'Shift+F10 must open the same menu');
+        failUserData=true;click(textButton('收藏',menu));await wait();
+        check(document.querySelector('[role="menu"] [role="alert"]')&&!mediaCard.querySelector('[aria-label="已收藏"]'),'Failed writes must expose retry without changing the badge');
+        failUserData=false;let release;releaseWrite={promise:new Promise(resolve=>release=resolve)};
+        const save=textButton('收藏',document.querySelector('[role="menu"]'));click(save);click(save);await wait();
+        check(favoriteWrites===2&&save.disabled,'Pending writes must prevent duplicate activation');
+        release();releaseWrite=null;await wait();check(!document.querySelector('[role="menu"]')&&mediaCard.querySelector('[aria-label="已收藏"]'),'Successful favorite write must update the card immediately');
+        await openContext();click(textButton('标记为已观看',document.querySelector('[role="menu"]')));await wait();
+        check(mediaCard.querySelector('[aria-label="已观看"]')&&watchedWrites===1,'Successful watched write must show the check badge');
+        await openContext();click(textButton('标记为未观看',document.querySelector('[role="menu"]')));await wait();
+        await openContext();click(textButton('取消收藏',document.querySelector('[role="menu"]')));await wait();
+        check(!mediaCard.querySelector('[aria-label="已观看"]')&&!mediaCard.querySelector('[aria-label="已收藏"]'),'Both state actions must be reversible');
+        await openContext();page().dispatchEvent(new Event('scroll',{bubbles:true}));await wait();check(!document.querySelector('[role="menu"]'),'Scrolling the page must dismiss the context menu');
+        await openContext();await go('/files');check(!document.querySelector('[role="menu"]'),'Navigation must dismiss menus for hidden retained pages');
+        const prohibited=new MouseEvent('contextmenu',{bubbles:true,cancelable:true});page().dispatchEvent(prohibited);
+        check(prohibited.defaultPrevented&&!document.querySelector('[role="menu"]'),'Other pages must suppress the native context menu');
+        await back();
         const library=page(); check(library.scrollHeight>library.clientHeight+1200,'Fixture must actually scroll');
         await scroll(library,1300); const top=library.scrollTop, firstQueries=queries.length;
         click(library.querySelector('button[title="Movie 040"]'));await wait();await back();
@@ -194,6 +227,25 @@ const esbuild = require('esbuild');
         const originalLabels=cards().map(card=>card.textContent);
         check(cards().every(card=>!card.querySelector('img')),'Disabled previews must also suppress library artwork');
         flushSync(()=>useSettings.setState({showPreviewImage:true}));await wait();
+        const homeCard=row=>homePage.querySelector('[aria-label="'+row+'列表"] button[title="Movie 001"]');
+        for(const row of ['继续观看','接下来','最新分类 0']) {
+          await openContext(homeCard(row));
+          check(textButton('收藏',document.querySelector('[role="menu"]')),'Every home media row must expose favorite/watched actions');
+          document.querySelector('[role="menu"]').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await wait();
+        }
+        click(homePage.querySelector('[aria-label="查看第 2 张预览"]'));await wait();
+        await openContext(homePage.querySelector('[aria-label="查看Movie 001详情"]'));
+        click(textButton('收藏',document.querySelector('[role="menu"]')));await wait();
+        check(['继续观看','接下来','最新分类 0'].every(row=>homeCard(row).querySelector('[aria-label="已收藏"]')),'Carousel favorite must synchronize duplicate home cards');
+        await openContext(homeCard('继续观看'));click(textButton('标记为已观看',document.querySelector('[role="menu"]')));await wait();
+        check(homeCard('接下来').querySelector('[aria-label="已观看"]')&&homeCard('最新分类 0').querySelector('[aria-label="已观看"]'),'Home watched state must synchronize rows');
+        await go('/server/fixture/library/movies');
+        check(page().querySelector('button[title="Movie 001"] [aria-label="已收藏"]')&&page().querySelector('button[title="Movie 001"] [aria-label="已观看"]'),'Home actions must update the retained library');
+        await back();
+        await openContext(homeCard('最新分类 0'));click(textButton('标记为未观看',document.querySelector('[role="menu"]')));await wait();
+        await openContext(homeCard('接下来'));click(textButton('取消收藏',document.querySelector('[role="menu"]')));await wait();
+        const noLibraryMenu=new MouseEvent('contextmenu',{bubbles:true,cancelable:true});cards()[0].dispatchEvent(noLibraryMenu);
+        check(noLibraryMenu.defaultPrevented&&!document.querySelector('[role="menu"]'),'Library entry tiles must retain default-menu suppression');
         const coverImage=cards()[0].querySelector('img');
         check(coverImage?.src===libraryCover&&coverImage.complete&&coverImage.naturalWidth>0,'Home must load the server library cover');
         check(cards()[0].querySelectorAll('img').length===1,'A library cover must replace the member-poster fan');
@@ -300,7 +352,9 @@ const esbuild = require('esbuild');
         check(page()===serverPage&&document.querySelector('[role="dialog"]'),'API replacement must not reset open server management forms');
         check(refreshes===startingRefreshes,'An API update must not recursively remount and refresh the server page');
         click(document.querySelector('[role="dialog"] button[aria-label="关闭"]'));await wait();
-        const edit=slot().querySelector('[aria-label="编辑服务器 Fixture"]');click(edit);await wait();
+        const card=slot().querySelector('[aria-label="打开服务器 Fixture"]');
+        card.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:300,clientY:150}));await wait();
+        click(textButton('编辑服务器',document.querySelector('[role="menu"]')));await wait();
         check(document.querySelector('[role="dialog"]')?.textContent.includes('编辑服务器'),'Server edit dialog must open');
         const nameInput=document.querySelector('[role="dialog"] input');check(nameInput&&nameInput.value==='Fixture','Edit must restore the saved connection fields');
         const setInput=(input,value)=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}));};
@@ -340,7 +394,7 @@ const esbuild = require('esbuild');
     for(const [width,scale] of [[1100,1],[480,1],[1100,1.25],[480,1.5]]){
       const execution=spawnSync(browser,['--headless=new','--no-first-run','--no-default-browser-check','--disable-background-networking',
         '--user-data-dir='+path.join(directory,'profile-'+width+'-'+scale),'--window-size='+width+',850','--force-device-scale-factor='+scale,
-        '--dump-dom','--virtual-time-budget=8000',pathToFileURL(file).href],{encoding:'utf8',windowsHide:true,timeout:30000,maxBuffer:8*1024*1024});
+        '--dump-dom','--virtual-time-budget=12000',pathToFileURL(file).href],{encoding:'utf8',windowsHide:true,timeout:30000,maxBuffer:8*1024*1024});
       if(execution.error)throw execution.error;
       assert.equal(execution.status,0,execution.stderr);
       const report=execution.stdout.match(/<pre id="result" data-status="([^"]+)"[^>]*>([\s\S]*?)<\/pre>/);
