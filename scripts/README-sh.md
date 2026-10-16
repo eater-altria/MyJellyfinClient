@@ -86,3 +86,7 @@ Linux 默认选择 Web，当前没有 Linux 原生播放后端。
 Windows 上默认选择桌面版；参数以数组调用对应 `.ps1`，保留下载/资源校验、签名、MSVC 环境及失败退出行为。PowerShell 路径参数使用 Windows 路径。NSIS 与便携输出仍在 `bundle/nsis/`、`bundle/portable/`。
 Mac 的 `ensure-mpv.sh` 收集已安装 libmpv，Windows 则通过原 `ensure-mpv.ps1` 下载播放器；不自动运行 `brew install` 或安装证书。
 所有入口支持 `--help`。可在 Bash 中 `source ./scripts/env.sh`，zsh 用户直接运行入口即可。
+
+## 一键发布
+
+在 Mac 的默认分支、干净工作区运行 `./scripts/release.sh X.Y.Z`，或 `npm run release -- X.Y.Z`。脚本先直接调用 PATH 中已登录的 `codex` 生成双端发布文档，再修改、提交并推送五个版本文件及标签；随后验证并发布 macOS App ZIP/DMG，把文档同时作为正文和附件，最后显式触发 Windows CI 追加 NSIS 安装版、单 EXE 便携版及校验文件。需先提交并推送脚本/工作流、登录 gh、启用 Actions 并允许追加附件。未完成发布前保留 `.tmp/releases/vX.Y.Z/` 中的文档与恢复状态。`--dry-run` 本地预览，`--resume` 恢复同版本发布；完整前提、签名限制和失败恢复见 [README](../README.md#一键发布-macos--windows)。普通 `build-tauri.sh` 仍仅打包，不发布。

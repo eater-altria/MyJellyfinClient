@@ -1,0 +1,121 @@
+name: Release Windows packages
+run-name: Windows installer and portable for ${{ inputs.tag }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (vX.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-windows-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Validate tag
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw 'Expected stable release tag vX.Y.Z'
+          }
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install Rust MSVC toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check release and version consistency
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          node scripts/release-version.mjs --check $env:RELEASE_TAG
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $release = gh release view $env:RELEASE_TAG --json isDraft,isImmutable | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($release.isDraft -or $release.isImmutable) { throw 'Release must be published and allow additional assets.' }
+      - name: Install locked frontend dependencies
+        run: npm ci
+      - name: Build NSIS installer with bundled mpv
+        shell: powershell
+        run: ./scripts/build-tauri.ps1
+      - name: Build portable EXE from the same application and runtime
+        shell: powershell
+        run: ./scripts/build-portable.ps1
+      - name: Prepare installer, portable EXE and SHA-256
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_TAG.Substring(1)
+          $packages = @(
+            "src-tauri/target/release/bundle/nsis/MyJellyfinClient_${version}_x64-setup.exe",
+            "src-tauri/target/release/bundle/portable/MyJellyfinClient_${version}_x64-portable.exe"
+          )
+          foreach ($package in $packages) {
+            if (!(Test-Path -LiteralPath $package) -or (Get-Item -LiteralPath $package).Length -eq 0) {
+              throw "Missing Windows package: $package"
+            }
+          }
+          New-Item -ItemType Directory -Force .tmp/windows-release | Out-Null
+          foreach ($package in $packages) {
+            Copy-Item -LiteralPath $package -Destination .tmp/windows-release
+            $name = Split-Path -Leaf $package
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $package).Hash.ToLowerInvariant()
+            Set-Content -Encoding ascii -LiteralPath ".tmp/windows-release/$name.sha256" -Value "$hash  $name"
+          }
+      - name: Preserve build artifacts for recovery
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ env.RELEASE_TAG }}
+          path: .tmp/windows-release/*
+          if-no-files-found: error
+      - name: Append assets without overwriting existing files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          foreach ($file in Get-ChildItem .tmp/windows-release -File) {
+            $release = gh release view $env:RELEASE_TAG --json assets | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $existing = @($release.assets | Where-Object name -eq $file.Name)
+            if ($existing.Count -gt 0) {
+              # A partial upload can be resumed only if the already uploaded bytes match.
+              $download = Join-Path $env:RUNNER_TEMP 'mjc-existing-asset'
+              New-Item -ItemType Directory -Force $download | Out-Null
+              gh release download $env:RELEASE_TAG --pattern $file.Name --dir $download --clobber
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $remoteHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $download $file.Name)).Hash
+              if ($remoteHash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash) {
+                throw "Existing asset differs; refusing to overwrite $($file.Name)"
+              }
+              continue
+            }
+            gh release upload $env:RELEASE_TAG $file.FullName
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $release = gh release view $env:RELEASE_TAG --json assets,url | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($file in Get-ChildItem .tmp/windows-release -File) {
+            if (!($release.assets | Where-Object { $_.name -eq $file.Name -and $_.size -eq $file.Length })) {
+              throw "Upload verification failed: $($file.Name)"
+            }
+          }
+          "Windows installer and portable package uploaded: $($release.url)" >> $env:GITHUB_STEP_SUMMARY

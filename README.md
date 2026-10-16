@@ -196,6 +196,49 @@ Windows Release 提供 `x64-setup.exe` 安装包和 `x64-portable.exe` 单文件
 codesign --verify --deep --strict src-tauri/target/release/bundle/macos/MyJellyfinClient.app
 ```
 
+### 一键发布 macOS + Windows
+
+先将发布脚本和 `.github/workflows/release-windows.yml` 提交并推送到默认分支。Mac 需具备上述构建依赖、GitHub CLI（`brew install gh`）以及已安装并登录的 Codex CLI。终端运行 `codex --version` 应成功；脚本直接从 PATH 调用 `codex`，不配置专用 CLI 路径。执行 `gh auth login` 登录有本仓库写权限和 Actions 触发权限的账号；仓库需启用 Actions，并关闭 immutable releases，使发布后可以追加 Windows 附件。Windows 工作流使用自带 `GITHUB_TOKEN`，无需额外的 Actions secrets；Codex 只在本机生成文档，不把其登录信息交给 Actions。
+
+在默认分支、干净工作区运行（版本号可带 `v`，仅支持递增的正式版 `X.Y.Z`）：
+
+```bash
+codex --version
+gh auth status
+npm run test:release                # 离线验证发布逻辑，不调用真实模型或发布
+./scripts/release.sh 0.6.0 --dry-run # 只展示计划，不调用 Codex、不修改、不联网
+./scripts/release.sh 0.6.0           # 或 npm run release -- 0.6.0
+```
+
+正式命令按以下顺序执行，不再逐步确认：
+
+1. **Codex 生成双端发布文档。** 使用 `codex exec` 的只读沙箱、非交互模式和最终回复文件，依据当前提交与属于当前 Git 历史的最近已发布正式版之间的差异，生成中文 Markdown；没有历史正式版则介绍当前实现。文档包含共用更新、macOS、Windows、安装与升级及已知限制，区分 macOS SDR/签名限制和 Windows 安装版/便携版。生成失败、正文为空或缺少双端章节时，在改版本前停止。CLI 用法见 [OpenAI 官方非交互文档](https://learn.chatgpt.com/docs/non-interactive-mode)。
+2. **修改指定版本。** 同步 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 和 `src-tauri/Cargo.lock`；客户端兼容标识版本保持原值。
+3. **提交并推送版本。** 只提交这五个版本文件，创建 `vX.Y.Z` 标签，原子推送默认分支和标签。此时尚未构建或公开 Release。
+4. **打包并发布 macOS。** 复用 macOS 打包入口，验证完整 App 签名、隔离启动、版本和 DMG，生成 App ZIP、DMG 及各自 SHA-256。以第一步文档为 Release 正文，并将同一 Markdown 作为附件，与 macOS 包一起上传草稿；核对后公开发布。
+5. **显式触发 Windows Actions。** 本地脚本调用 `gh workflow run release-windows.yml --ref vX.Y.Z -f tag=vX.Y.Z`。工作流只使用 `workflow_dispatch`，不再监听 Release published，避免重复构建。
+6. **追加 Windows 两种包。** Actions 从同一标签检出源码，校验版本与 Release 状态，复用 `build-tauri.ps1` 构建安装版，再用 `build-portable.ps1` 将同一主程序和运行资源打包为单 EXE 便携版。向同一 Release 追加 `x64-setup.exe`、`x64-portable.exe` 及两个 SHA-256 文件，并保留到该次 Actions artifacts。
+
+文档与恢复状态保存在 `.tmp/releases/vX.Y.Z/release-notes-vX.Y.Z.md` 和 `state.json`，不提交到 Git。状态绑定生成文档时的源码提交、版本提交及文档 SHA-256；未完成发布前不要清理或改写这些文件。文档生成采用当前 Codex 配置与登录，模型仍需能正常访问。`--dry-run` 仅展示计划，不代表构建环境、模型或远程权限已经通过检查。
+
+macOS 架构和最低系统版本取决于本机 libmpv，保留现有 ad-hoc 签名，未增加 Developer ID 签名或公证。Windows CI 没有证书时按现有逻辑跳过签名。便携版的账号和设置位于 EXE 旁 `MyJellyfinClient-data/`，不安装 WebView2 Runtime。本地命令在 macOS 发布并成功触发 Windows 后结束，Windows 构建/上传结果在 [Actions](https://github.com/eater-altria/MyJellyfinClient/actions/workflows/release-windows.yml) 查看。
+
+失败后恢复：
+
+```bash
+./scripts/release.sh 0.6.0 --resume
+```
+
+- 版本提交前失败：检查并处理本次留下的本地修改，再用普通命令重试；不能在版本尚未更新时使用 `--resume`。
+- 版本提交后失败：修复环境/网络问题，在原版本和原 HEAD 上使用 `--resume`，复用已生成文档，不再次调用 Codex或重复提交。因为推送发生在构建之前，macOS 构建失败也可能已经留下远程版本提交与标签；脚本不会回滚或移动它们。
+- 尚未公开：重新推送同一提交/标签、重新构建并继续草稿上传；显式恢复允许替换该版本草稿附件，并恢复同一文档正文。
+- 已经公开：仅重新触发 Windows，不重建 macOS、不改正文或公开附件。也可在 Actions 的 Run workflow 中填写原标签。触发失败不会撤销已经公开的 macOS Release。
+- 源码已改变：使用新版本。未公开的恢复若丢失 `.tmp/releases/vX.Y.Z/`，需要恢复原文档与状态文件，不能自动换一份说明继续发布。
+
+已有同名 Windows 附件只有字节完全相同才跳过，不同则停止，不覆盖公开文件。重新构建可能因时间戳或 mpv 最新构建不同而改变包；若部分附件上传成功，从原次 Actions artifacts 恢复原始文件后补传缺失附件，或修复后使用新版本。两种 Windows 包全部构建成功才开始上传。
+
+离线回归 `npm run test:release` 覆盖生成失败、版本/提交/推送/构建/发布顺序、正文和附件一致、恢复绑定及 Windows 触发失败；它不等同于真实 Codex 生成、Windows 打包或 GitHub 发布验收。
+
 ### Web 静态包
 
 `./scripts/build-tauri.sh --web` 生成 `dist/` 及 `.tmp/web-packages/` 下的静态资源压缩包和 SHA-256。解压后通过 HTTP 服务访问；它不是桌面安装包。

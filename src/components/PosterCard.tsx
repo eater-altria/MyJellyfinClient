@@ -70,7 +70,7 @@ export default function PosterCard({
       {...contextActions}
       onClick={onClick}
       type="button"
-      className="media-card group shrink-0 rounded-[20px] text-left"
+      className="media-card group flex shrink-0 flex-col rounded-[20px] text-left"
       style={{ width: w }}
       title={item.Name}
     >
