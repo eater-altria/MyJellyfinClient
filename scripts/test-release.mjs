@@ -48,6 +48,11 @@ const args = process.argv.slice(2);
 fs.mkdirSync('.tmp', {recursive:true});
 fs.appendFileSync('.tmp/commands.jsonl', JSON.stringify([command, ...args]) + '\\n');
 const realGit = ${JSON.stringify(realGit)};
+if (command === 'cargo') {
+  // Homebrew Cargo rejects +toolchain; rustup requires the Mac override in this repository.
+  if (JSON.stringify(args) !== '["--version"]' || process.env.RUSTUP_TOOLCHAIN !== 'stable') process.exit(8);
+  if (process.env.MJC_FIXTURE_FAIL_CARGO) process.exit(7);
+}
 if (command === 'git') {
   if (args[0] === 'remote') { console.log('https://github.com/eater-altria/MyJellyfinClient.git'); process.exit(0); }
   if (args[0] === 'fetch') process.exit(0);
@@ -92,6 +97,7 @@ if (command === 'codex') {
   fs.writeFileSync(args[args.indexOf('--output-last-message')+1], process.env.MJC_FIXTURE_EMPTY_CODEX?'':notes);
 }
 if (command === 'bash') {
+  if (process.env.RUSTUP_TOOLCHAIN !== 'stable') process.exit(8);
   if (process.env.MJC_FIXTURE_FAIL_BUILD) process.exit(7);
   const version=JSON.parse(fs.readFileSync('package.json')).version;
   const bundle='src-tauri/target/release/bundle';
@@ -108,7 +114,7 @@ if (command === 'ditto') fs.writeFileSync(args.at(-1),'fixture app zip');
     }
     // Make the extensionless command fixtures ESM independently of the fixture repository.
     fs.writeFileSync(path.join(temporary, 'package.json'), '{"type":"module"}');
-    const env = { ...process.env, PATH: `${commands}:${process.env.PATH}` };
+    const env = { ...process.env, PATH: `${commands}:${process.env.PATH}`, RUSTUP_TOOLCHAIN: 'stable-x86_64-pc-windows-msvc' };
     delete env.CARGO_TARGET_DIR;
     delete env.CARGO_BUILD_TARGET;
     let count = 0;
@@ -144,6 +150,14 @@ if (command === 'ditto') fs.writeFileSync(args.at(-1),'fixture app zip');
       return { fixture, git, execute, calls, clear };
     }
     const releaseCall = calls => calls.some(call => call[0] === 'gh' && ['release', 'workflow'].includes(call[1]));
+    const cargoFailure = setup();
+    const cargoHead = cargoFailure.git('rev-parse', 'HEAD');
+    assert.equal(cargoFailure.execute(false, { MJC_FIXTURE_FAIL_CARGO: '1' }).status, 1);
+    assert.equal(cargoFailure.git('rev-parse', 'HEAD'), cargoHead);
+    assert.equal(cargoFailure.git('status', '--porcelain'), '');
+    assert.ok(!cargoFailure.calls().some(call => call[0] === 'codex' || call[0] === 'bash' ||
+      (call[0] === 'git' && ['push', 'commit'].includes(call[1]))));
+    assert.ok(!releaseCall(cargoFailure.calls()));
     for (const failure of ['MJC_FIXTURE_FAIL_CODEX', 'MJC_FIXTURE_EMPTY_CODEX', 'MJC_FIXTURE_DIRTY_CODEX']) {
       const test = setup();
       const head = test.git('rev-parse', 'HEAD');
@@ -227,6 +241,7 @@ if (command === 'ditto') fs.writeFileSync(args.at(-1),'fixture app zip');
       assert.ok(!test.calls().some(call => call[0] === 'codex' || call[0] === 'bash' || (call[0] === 'gh' && call[1] === 'release') || (call[0] === 'git' && call[1] === 'push')));
     }
     console.log('PASS Codex → version commit → push → macOS build/notes publication → explicit Windows dispatch');
+    console.log('PASS standalone Cargo arguments, process-only stable override and Cargo failure before release mutations');
     console.log('PASS push/build/upload/dispatch recovery, original notes and HEAD binding, published retry without asset replacement');
   }
   console.log('PASS release version synchronization, dependency preservation, invalid inputs and nonmutating dry run');

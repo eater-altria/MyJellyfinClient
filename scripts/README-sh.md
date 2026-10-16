@@ -15,6 +15,8 @@ brew install mpv pkg-config
 
 macOS 上省略模式默认选择桌面版。脚本只为本次进程设置 `RUSTUP_TOOLCHAIN=stable`，保留仓库的 Windows 工具链文件。前端工具缺少时自动执行 `npm ci`，缓存放在 `.npm-cache/`；锁文件更新后应手动重新执行 `npm ci --cache .npm-cache`。
 
+发布入口也使用同一进程级 `RUSTUP_TOOLCHAIN=stable`，预检调用 `cargo --version`，兼容 PATH 中的 Homebrew 独立 Cargo 和 rustup 代理；不使用仅 rustup 代理支持的 `cargo +stable`，不修改全局 Rust 配置。
+
 播放共用现有 `NativePlayer` 的服务器协商、续播和进度上报，Mac 在 Cocoa/CGL 视图中运行 libmpv OpenGL render API；复用 Lua OSC 与 GPU 玻璃 shader。不带独立原型的「打开视频 / OpenGL 渲染」工具区，只保留现有媒体标题栏和播放控件。
 
 输出：

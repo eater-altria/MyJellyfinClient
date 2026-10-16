@@ -49,6 +49,9 @@ try {
     process.exit(0);
   }
   if (process.platform !== 'darwin') throw new Error('Run this release entry on macOS.');
+  // Match build-tauri.sh: rustup honors this override; standalone Cargo also works.
+  // The +stable argument is handled only by rustup's proxy, not Homebrew Cargo.
+  process.env.RUSTUP_TOOLCHAIN = 'stable';
   if (process.env.CARGO_TARGET_DIR || process.env.CARGO_BUILD_TARGET) throw new Error('Unset CARGO_TARGET_DIR and CARGO_BUILD_TARGET so release artifacts use the standard path.');
   if (git('status', '--porcelain')) throw new Error('Working tree must be clean. Commit your changes first; user files are never auto-staged.');
   const branch = git('symbolic-ref', '--short', 'HEAD');
@@ -62,7 +65,7 @@ try {
   if (git('rev-list', '--count', `HEAD..origin/${branch}`) !== '0') throw new Error('Local branch is behind/diverged from origin; synchronize it first.');
   run('pkg-config', ['--exists', 'mpv']);
   run('xcrun', ['--find', 'clang']);
-  run('cargo', ['+stable', '--version']);
+  run('cargo', ['--version']);
   const tagExists = git('tag', '--list', tag) === tag;
   if (tagExists && (!resume || git('rev-parse', `${tag}^{commit}`) !== git('rev-parse', 'HEAD'))) throw new Error('Tag already exists; --resume requires its exact HEAD. Tags are never moved.');
   if (resume && plan.some(entry => entry.versions.some(v => v !== version))) throw new Error('--resume requires all version definitions to already match.');
