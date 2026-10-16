@@ -27,6 +27,21 @@ try {
   assert.deepEqual(updatedLock, originalLock, 'dependency lock data is unchanged');
   const updatedCargo = fs.readFileSync(path.join(temporary, 'src-tauri/Cargo.lock'), 'utf8');
   assert.equal(updatedCargo.replace('name = "my-jellyfin-client"\nversion = "1.2.3"', `name = "my-jellyfin-client"\nversion = "${plan[4].versions[0]}"`), originalCargo);
+  for (const newline of ['\n', '\r\n']) {
+    for (const entry of plan.filter(entry => entry.file.startsWith('src-tauri/Cargo.'))) {
+      fs.writeFileSync(path.join(temporary, entry.file), entry.after.replace(/\r?\n/g, newline));
+    }
+    const changed = versionPlan(temporary, '1.2.4');
+    for (const entry of changed.filter(entry => entry.file.startsWith('src-tauri/Cargo.'))) {
+      assert.deepEqual(entry.versions, ['1.2.3']);
+      assert.equal(entry.after.replace(`name = "my-jellyfin-client"${newline}version = "1.2.4"`,
+        `name = "my-jellyfin-client"${newline}version = "1.2.3"`), entry.before,
+        'only the application version changes; Cargo dependency data and line endings are preserved');
+      fs.writeFileSync(path.join(temporary, entry.file), entry.after);
+    }
+    assert.ok(versionPlan(temporary, '1.2.4').filter(entry => entry.file.startsWith('src-tauri/Cargo.'))
+      .every(entry => entry.versions[0] === '1.2.4' && entry.before === entry.after));
+  }
   fs.writeFileSync(path.join(temporary, 'src-tauri/Cargo.lock'), 'invalid lock');
   assert.throws(() => versionPlan(temporary, '1.2.4'), /Missing application version/);
   const before = versionFiles.map(file => fs.readFileSync(path.join(projectRoot, file), 'utf8'));

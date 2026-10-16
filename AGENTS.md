@@ -275,6 +275,8 @@ RUSTUP_TOOLCHAIN=stable cargo test --manifest-path src-tauri/Cargo.toml --lib
 
 ## 提交与发布
 
+- Windows Actions 的 checkout 通过步骤级 Git 配置保留 LF，避免旧标签中的工具被 CRLF 转换影响；`release-version.mjs` 同时接受 LF/CRLF，并保留 Cargo 文件原换行与依赖版本。工作流修复后可从默认分支手动触发并传入原 release tag，仍构建原标签源码；不移动标签、不覆盖现有附件，直接重跑旧任务不会采用新版工作流。
+
 - 一键发布入口为 `./scripts/release.sh X.Y.Z`（或 `npm run release -- X.Y.Z`），在 macOS 默认分支的干净工作区执行；`--dry-run` 只展示计划，`--resume` 恢复同版本/同 HEAD。先直接调用 PATH 中已登录的 `codex exec`，以只读模式依据当前源码与最近已发布正式版生成覆盖 macOS/Windows 的中文发布文档；失败在修改版本前停止。同步 npm/Tauri/Cargo 及两个锁文件，只提交五个版本文件，不更改客户端兼容标识；创建标签并原子推送分支/标签后才构建 macOS。验证 App 签名、隔离启动与 DMG，上传 App ZIP、DMG、SHA-256 和 Markdown 文档到草稿，同一文档作为 Release 正文，核对后发布。随后显式触发 `.github/workflows/release-windows.yml` 的 `workflow_dispatch`，从同一标签构建 NSIS 安装版和单 EXE 便携版，全部成功后追加两包及校验文件；不监听 Release published，不安装证书。需要 Codex/gh 登录、Actions 启用、允许追加附件（不可开启 immutable releases）。`.tmp/releases/vX.Y.Z/` 保存文档、哈希及原始/版本提交恢复状态，未完成前不要清理；恢复复用原文档，不重复生成或提交。构建失败可能已推送版本与标签，不自动回滚；源码改变应使用新版本。已发布时恢复仅触发 Windows，公开资产不覆盖、标签不移动，草稿仅在显式恢复时可替换附件。前提与恢复见 README；离线回归为 `npm run test:release`，不等同真实 Codex/Windows/GitHub 发布验收。
 
 - macOS 打包将已安装 libmpv 的实际 Mach-O 依赖图收集到 `.tmp/macos-runtime/`，修改副本的 install name 为 `@loader_path`/`@rpath` 并做本地 ad-hoc 签名，不改 Homebrew 原件。App 中明确收录这些库与 Lua/shader；不递归收录用户数据。最低系统版本取全部动态库的 `minos` 最大值（至少 14.0），同步到构建配置与 deployment target；不能把 macOS 26 bottle 打包成宣称兼容 macOS 14 的应用。当前只验证 Apple Silicon，本机库不支持自动生成 Universal 包。

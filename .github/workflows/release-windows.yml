@@ -31,6 +31,11 @@ jobs:
             throw 'Expected stable release tag vX.Y.Z'
           }
       - uses: actions/checkout@v4
+        # Keep tagged source bytes unchanged, including older LF-only version scripts.
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
         with:
           ref: refs/tags/${{ env.RELEASE_TAG }}
           persist-credentials: false

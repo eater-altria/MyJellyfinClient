@@ -31,9 +31,10 @@ export function versionPlan(root, value) {
       }
       after = `${JSON.stringify(data, null, 2)}\n`;
     } else {
+      // Windows Git checkouts may use CRLF. Preserve the original line endings when editing.
       const pattern = file.endsWith('Cargo.toml')
-        ? /(\[package\][\s\S]*?\nversion = ")([^"]+)(")/
-        : /(\[\[package\]\]\nname = "my-jellyfin-client"\nversion = ")([^"]+)(")/;
+        ? /(\[package\][\s\S]*?\r?\nversion = ")([^"]+)(")/
+        : /(\[\[package\]\]\r?\nname = "my-jellyfin-client"\r?\nversion = ")([^"]+)(")/;
       const match = before.match(pattern);
       if (!match) throw new Error(`Missing application version in ${file}`);
       versions = [match[2]];
