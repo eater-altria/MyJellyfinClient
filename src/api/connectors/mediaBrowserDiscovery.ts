@@ -1,4 +1,5 @@
 import { normalizeAddress } from '../helpers';
+import { mediaServerRequest } from '../../platform/mediaServerRequest';
 import type { PublicSystemInfo } from '../types';
 import { DEFAULT_CLIENT_IDENTITY } from '../../utils/clientIdentityValues';
 import { ServerDetectionError, type DetectedServer, type DiscoveryOptions, type ServerConnector } from './types';
@@ -63,8 +64,8 @@ export async function discoverMediaBrowser(input: string, options: DiscoveryOpti
         // Legacy automatic discovery starts with Jellyfin's credential-free header.
         const headers = (configs.find(connector => connector.id === options.protocol) ?? configs[0]).publicHeaders(identity);
         let authorizationOnly = false;
-        const request = (requestHeaders: Record<string, string>) => fetch(candidate + '/System/Info/Public', {
-          headers: requestHeaders, signal: controller.signal, cache: 'no-store',
+        const request = (requestHeaders: Record<string, string>) => mediaServerRequest(candidate + '/System/Info/Public', {
+          headers: requestHeaders, signal: controller.signal, cache: 'no-store', publicDiscovery: true,
         });
         let response: Response;
         try { response = await request(headers); }

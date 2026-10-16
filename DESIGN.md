@@ -294,6 +294,8 @@ Hook 依赖反映真实数据关系；不通过省略依赖隐藏状态问题。
 
 Jellyfin / Emby 差异集中在 API 层，保留反向代理前缀、媒体源 HTTP 头和已有查询参数。新增 URL 处理使用明确的解析与合并规则，不能把本站令牌无条件附加到外部媒体或字幕地址。
 
+桌面媒体服务器 API 经 `mediaServerRequest` 调用原生 HTTP，以支持没有配置 CORS 的服务器；使用与 WebView 一致的固定 RodelPlayer HTTP UA、系统 TLS 校验和可取消任务，不在登录失败后换传输重放。浏览器仍受 fetch/CORS 约束。原生请求限制方法、头、正文和响应大小；公开跨域重定向移除设备鉴权头，带凭据请求禁止跨域转发，写请求不跟随重定向。完整边界与验证入口见 `AGENTS.md`。
+
 服务器类型选项、名称、客户端标识设置与预设由 `src/api/connectors/index.ts` 注册表生成；选项较多时自然换行。服务器图标经 `ServerIcon` 统一展示，无品牌图标的连接器使用通用服务器图标。页面按连接器的 `supportsDeviceRegistration` 与 `requiresNativePlaybackInfo` 能力决定设备登记入口和原生播放协商，不复制 Jellyfin/Emby 条件判断。当前注册的后端仍为 Jellyfin 和 Emby，默认选择及旧连接回退为 Jellyfin。
 
 日志与提示可包含动作、阶段和脱敏错误，不能包含密码、访问令牌或完整带鉴权 URL。ASS 文本经过转义；文件名、服务器名称等外部文本不能作为控制指令拼接执行。测试使用本地 fixture 和虚构数据。

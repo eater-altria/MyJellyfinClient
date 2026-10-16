@@ -6,6 +6,7 @@ import type { AuthResult, BaseItem, ItemsResult, LibraryFilterOptions, MediaSour
 import type { MediaServerApi } from './types';
 import type { ServerProtocol } from './index';
 import { getDeviceId, mediaBrowserAuthHeader } from './mediaBrowserAuth';
+import { mediaServerRequest } from '../../platform/mediaServerRequest';
 import { readDanmakuResponse } from '../../player/danmaku';
 
 const LIST_ITEM_FIELDS = 'Overview,PrimaryImageAspectRatio,DateCreated,MediaSources,MediaStreams,Chapters,ChildCount,RecursiveItemCount';
@@ -61,7 +62,7 @@ export abstract class MediaBrowserApi implements MediaServerApi {
   }
 
   async get<T>(path: string, params?: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
-    const res = await fetch(this.url(path, params), { headers: this.headers(), signal });
+    const res = await mediaServerRequest(this.url(path, params), { headers: this.headers(), signal });
     if (!res.ok) throw new ApiError(res.status, await safeText(res));
     return res.json() as Promise<T>;
   }
@@ -69,7 +70,7 @@ export abstract class MediaBrowserApi implements MediaServerApi {
   async getDanmakuXml(itemId: string, signal?: AbortSignal): Promise<string | null> {
     // Read through the configured entry, not the plugin's absolute Url, which
     // omits reverse-proxy prefixes. Reject redirects before sending credentials.
-    const response = await fetch(this.url(`/api/danmu/${encodeURIComponent(itemId)}/raw`), {
+    const response = await mediaServerRequest(this.url(`/api/danmu/${encodeURIComponent(itemId)}/raw`), {
       headers: { ...this.headers(), Accept: 'application/xml,text/xml' }, signal, redirect: 'error',
     });
     if (response.status === 404 || response.status === 204) return null;
@@ -78,7 +79,7 @@ export abstract class MediaBrowserApi implements MediaServerApi {
   }
 
   async post<T = void>(path: string, body?: unknown, params?: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
-    const res = await fetch(this.url(path, params), {
+    const res = await mediaServerRequest(this.url(path, params), {
       method: 'POST',
       headers: this.headers(),
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -91,20 +92,20 @@ export abstract class MediaBrowserApi implements MediaServerApi {
   }
 
   async del(path: string, params?: Record<string, unknown>): Promise<void> {
-    const res = await fetch(this.url(path, params), { method: 'DELETE', headers: this.headers() });
+    const res = await mediaServerRequest(this.url(path, params), { method: 'DELETE', headers: this.headers() });
     if (!res.ok) throw new ApiError(res.status, await safeText(res));
   }
 
   // ---------- Server ----------
   async getPublicSystemInfo(signal?: AbortSignal): Promise<PublicSystemInfo> {
-    const res = await fetch(this.url('/System/Info/Public'), { headers: this.headers(), signal, cache: 'no-store' });
+    const res = await mediaServerRequest(this.url('/System/Info/Public'), { headers: this.headers(), signal, cache: 'no-store' });
     if (!res.ok) throw new ApiError(res.status, await safeText(res));
     return res.json();
   }
 
   // ---------- Auth ----------
   async authenticate(username: string, password: string): Promise<AuthResult> {
-    const res = await fetch(this.url('/Users/AuthenticateByName'), {
+    const res = await mediaServerRequest(this.url('/Users/AuthenticateByName'), {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify({ Username: username, Pw: password }),

@@ -29,6 +29,7 @@ macOS 的媒体库接入、内嵌播放与 GPU 玻璃控件已完成验收，当
 | `src/api/connectors/MediaBrowserApi.ts`、`mediaBrowserDiscovery.ts`、`mediaBrowserAuth.ts` | 两种相关协议共用的 REST、公开探测、URL 与设备鉴权实现；其他后端可独立实现契约 |
 | `src/api/types.ts`、`helpers.ts` | 页面使用的统一媒体模型、列表规则、URL 规范化、错误及格式化 |
 | `src/api/detectServer.ts` | 按连接器调度公开探测；同一探测函数合并执行，手动协议保持优先 |
+| `src/platform/mediaServerRequest.ts`、`src-tauri/src/media_server_http.rs` | 桌面媒体 API 的原生 HTTP、共享 UA、系统 TLS、取消和重定向边界；浏览器保留 fetch |
 | `src/utils/clientIdentity.ts`、`src/utils/defaultClientIdentity.json` | 客户端名称预设、共享兼容默认标识和文本规范化；设备 ID 仍由 API 使用原有持久值 |
 | `src-tauri/src/client_identity.rs` | 桌面 WebView 的真实 HTTP User-Agent、共享兼容版本、Windows 实际版本查询与 macOS 平台/架构 |
 | `src/store/servers.ts` | 服务器登录状态、令牌、API 实例和持久化 |
@@ -136,7 +137,8 @@ macOS 的 WKWebView 不使用 WebView2 数据目录；开发版使用固定的�
    电影/剧集 LOGO 独立放在封面背景上，仅保留贴近图形的轻微轮廓阴影，去掉整片底色与渐变；下方浅色玻璃信息卡顶部始终显示文字节目名，作为唯一的 h1。LOGO 原色和比例不变，无图、加载失败或关闭预览时仅移除外部 LOGO 区域；单集仍使用文字标题。关闭预览不请求详情背景或 LOGO，重新启用可重试图片；两页共用 `MediaDetailHeader`。
 10. 「设置 → 通用」分别配置 Jellyfin 和 Emby 客户端标识：对应产品的常用名称下拉、自定义名称、版本和设备名称存储于 `clientIdentities`。空值使用共享 `defaultClientIdentity.json` 的 RodelPlayer、2.2610.12.0 及 Windows PC 兼容标识；保留手动设置，各自的默认项只恢复对应产品三项。按实际服务器协议读取标识，登录、缓存/重建的 API 实例和连通性探测共用；尚未知产品的公开探测尝试两套不同标识，不发送账号、令牌或密码，网络/JSON 失败不重复等待同一端点。鉴权字段按 URL 编码，保留稳定的设备 ID；播放协商名称随客户端名称变化，但媒体能力仍按实际播放器生成。桌面 WebView 创建时设置真实 HTTP User-Agent 为同一共享名称/版本；Windows 追加只读查询的实际 Windows NT 版本、构建号和架构，macOS 追加平台名称与架构，覆盖首次登录及其他 WebView HTTP 请求；设置页字段仅影响鉴权标识，不改变这一固定 UA。纯浏览器开发模式仍使用浏览器 UA，mpv 视频请求仍沿用原有 UA。不向外部图片/媒体 URL 附加本站鉴权标识或令牌；WebView UA 只含公开兼容名称/版本与平台信息。
 11. 已识别服务器的 `Authorization` 和 `X-Emby-Authorization` 必须使用同一协议前缀：Emby 使用 `Emby`，Jellyfin 使用 `MediaBrowser`。账号密码通过 `/Users/AuthenticateByName` 的 `Username` / `Pw` 换取服务器返回的 `AccessToken`，原样按服务器保存；客户端不生成、散列或跨应用借用令牌，也不为刷新令牌擅自重置持久设备 ID。
-    部分代理的 CORS 仅允许 `Authorization`，不允许 `X-Emby-*`。公开探测遇到未取消、未超时的 fetch `TypeError` 时，可在同一超时窗口内仅用标准 `Authorization` 重试一次，仍不含账号、密码或令牌；只有此请求成功且公共响应有效才将 `authorizationOnly` 保存到该连接。此模式的登录及 API 请求仅发送标准鉴权头，令牌仍放在该头的 `Token` 字段，缓存/重建 API 保持一致。普通连接保留原双头和令牌头；登录与写操作不因网络错误自动重放，不关闭浏览器跨域或 TLS 校验。
+    桌面 Jellyfin/Emby 的公开探测、登录及 REST/服务器弹幕请求共用 `mediaServerRequest` 原生 HTTP，支持未配置浏览器 CORS 的服务器。HTTP User-Agent 沿用 `client_identity` 的固定 RodelPlayer 名称/版本与平台信息，保留可编辑的鉴权标识。使用系统 TLS 校验，不带 Cookie，不关闭 WebView 安全策略；请求不自动重试，超时 30 秒（公开探测仍受前端 5 秒窗口约束），响应最多 32 MiB。AbortSignal 取消原生任务，包括启动 IPC 尚未确认时的取消，迟到响应不能套用。公开重定向跨域时移除鉴权/设备头且不采用目标作为登录入口；带凭据 API 仅允许同源 GET 重定向，POST/DELETE 不跟随，HTTPS 不降级；服务器弹幕继续拒绝全部重定向。图片、mpv 视频、自定义弹幕 API 和更新检查保持各自请求路径。
+    浏览器模式仍使用 fetch/CORS。部分代理仅允许 `Authorization`，不允许 `X-Emby-*`：公开探测遇到未取消、未超时的 fetch `TypeError` 时，可在同一超时窗口内仅用标准 `Authorization` 重试一次，仍不含账号、密码或令牌；只有此请求成功且公共响应有效才将 `authorizationOnly` 保存到该连接。此模式的登录及 API 请求仅发送标准鉴权头，令牌仍放在该头的 `Token` 字段，缓存/重建 API 保持一致。普通连接保留原双头和令牌头；登录与写操作不因网络错误自动重放，不关闭浏览器跨域或 TLS 校验。
 12. 编辑 Emby 连接可显式勾选「重新登记此服务器的登录设备」，并填写该连接的客户端名称、重新输入密码。仅该连接生成新的 `deviceId`，成功登录后与 `clientName` 一起保存；失败保留原连接。之后登录、缓存/重建 API、播放协商和流 URL 共用此固定 ID，客户端名称优先使用连接的覆盖值，版本及设备名称仍来自对应产品设置。其他连接和原有全局设备 ID 保持稳定；普通删除、添加、编辑和重新登录不自动重置设备身份。该选项用于服务端按首次设备登记限制播放的兼容情况，不应自动替用户选择客户端名称。
 
 ## 页面保留与浏览筛选
@@ -249,6 +251,8 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 `test-mpv-setup.ps1` 在 Windows PowerShell 5.1 下使用离线传输 fixture 和真实 `tar.exe` 验证缺失下载、完整资源复用、部分资源修复、控制脚本保留、校验失败、架构与压缩包检查、安装回滚和临时目录清理，不使用账号或访问网络。
 
 `test:servers` 先运行 `test-connectors.cjs`，仅在测试编译时给注册表注入独立的第三连接器，使用不同端点/鉴权/响应格式的本地 HTTP fixture 验证完整应用的 TypeScript 编译、自动/手动探测、登录、持久化、API 缓存及重建、实时标识、失败回滚、取消、真实 React 静态渲染的连接选项/设置分组和默认图标。测试连接器不进入生产注册表；这不属于新增真实后端支持。
+
+`test:servers` 中的 `test-media-server-request.cjs` 验证桌面请求桥的探测/登录/媒体库与 API 重建、启动确认前取消、迟到响应、HTTP 状态、失败不重放与浏览器回退；使用模拟 IPC。Rust `media_server_http` 测试使用无 CORS 的本地 HTTP fixture，验证实际请求 UA、鉴权与正文、状态/响应大小、重定向凭据隔离及原生任务取消，不使用真实账号。
 
 `test:servers` 的 `test-server-order.cjs` 使用真实 React、隔离 Chromium profile 与原生鼠标/键盘事件，验证卡片、侧栏及跨区域拖动、真实指针捕获、跟随预览的可见位置与服务器身份、同步顺序、仅落下保存、焦点和普通点击/编辑、Esc/指针取消/落点无效、隐藏/卸载清理、拖动中删除/新增、刷新与编辑、两处自动滚动、持久化及全新页面/store 恢复。覆盖普通/窄窗口和 100% / 125% / 150% DPI；只使用合成服务器，不读取用户浏览器、账号或地址，不属于真实 Tauri/mpv 验证。
 
