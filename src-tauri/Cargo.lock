@@ -1812,7 +1812,7 @@ dependencies = [
 
 [[package]]
 name = "my-jellyfin-client"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "cc",
  "pkg-config",
