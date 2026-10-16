@@ -1,6 +1,6 @@
 {
   "name": "my-jellyfin-client",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "A Jellyfin / Emby Windows client with a Liquid Glass inspired UI",
   "type": "module",
   "scripts": {
