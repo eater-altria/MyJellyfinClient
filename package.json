@@ -12,7 +12,7 @@
     "release": "bash scripts/release.sh",
     "test:release": "node scripts/test-release.mjs",
     "test:servers": "node scripts/test-connectors.cjs && node scripts/test-media-servers.cjs && node scripts/test-media-server-request.cjs && node scripts/test-client-user-agent.cjs && node scripts/test-server-order.cjs",
-    "test:playback": "node scripts/test-playback-diagnostics.cjs && node scripts/test-playback-cancel.cjs && node scripts/test-browser-player.cjs && node scripts/test-danmaku.cjs",
+    "test:playback": "node scripts/test-playback-diagnostics.cjs && node scripts/test-playback-cancel.cjs && node scripts/test-browser-player.cjs && node scripts/test-playback-resume.cjs && node scripts/test-danmaku.cjs",
     "test:danmaku": "node scripts/test-danmaku.cjs",
     "test:home": "node scripts/test-home-libraries.cjs && node scripts/test-library-sort.cjs && node scripts/test-issue2-navigation.cjs",
     "test:settings": "node scripts/test-list-settings.cjs && node scripts/test-playback-preferences.cjs && node scripts/test-browser-settings.cjs && node scripts/test-app-updates.cjs",

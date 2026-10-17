@@ -58,6 +58,7 @@ function mount(protocol, pending, macos = false) {
     dispatchEvent: event => { keys.get(event.type)?.(event); return !event.defaultPrevented; },
   };
   const modules = {
+    '../player/playbackProgress': require('./source-bundle.cjs')('src/player/playbackProgress.ts'),
     '../hooks/useDanmaku': { useDanmaku: () => ({ comments: [], choices: [], status: '', loading: false }) },
     '../player/danmakuSettings': require('./source-bundle.cjs')('src/player/danmakuSettings.ts'),
     '../api/mediaServer': require('./source-bundle.cjs')('src/api/mediaServer.ts'),

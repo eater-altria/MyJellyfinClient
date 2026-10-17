@@ -12,6 +12,7 @@ import { PLAYER_EXIT_EVENT } from '../player/exitPlayback';
 import { mediaTitle, usePlaybackTitle } from '../player/playbackTitle';
 import LiquidGlass from '../components/LiquidGlass';
 import { useBrowseActivity } from '../hooks/useBrowseActivity';
+import { publishPlaybackPosition } from '../player/playbackProgress';
 import { useDanmaku } from '../hooks/useDanmaku';
 import { danmakuDisplaySettings } from '../player/danmakuSettings';
 import '../player/liquid-glass.css';
@@ -124,6 +125,7 @@ export default function NativePlayer() {
       stopped = true;
       const s = session;
       const ticks = Math.round(latestPos.position * 10_000_000);
+      if (loaded) publishPlaybackPosition(api, itemId, latestPos.position, latestPos.duration);
       api
         .reportPlaybackStopped({
           ItemId: itemId,

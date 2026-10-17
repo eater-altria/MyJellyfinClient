@@ -28,6 +28,7 @@ import { PLAYER_EXIT_EVENT } from '../player/exitPlayback';
 import { mediaTitle, usePlaybackTitle } from '../player/playbackTitle';
 import LiquidGlass from '../components/LiquidGlass';
 import { useBrowseActivity } from '../hooks/useBrowseActivity';
+import { publishPlaybackPosition } from '../player/playbackProgress';
 import { useDanmaku } from '../hooks/useDanmaku';
 import DanmakuCanvas from '../components/DanmakuCanvas';
 import { IconDanmaku, IconDanmakuOff } from '../components/icons';
@@ -334,6 +335,7 @@ export default function PlayerPage() {
     if (!api || !v || !s.mediaSourceId || !startedRef.current) return;
     const ticks = Math.round(v.currentTime * 10_000_000);
     startedRef.current = false;
+    if (itemId) publishPlaybackPosition(api, itemId, v.currentTime, v.duration);
     api
       .reportPlaybackStopped({
         ItemId: itemId,
