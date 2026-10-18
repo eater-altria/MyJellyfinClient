@@ -1,6 +1,6 @@
 [package]
 name = "my-jellyfin-client"
-version = "0.5.4"
+version = "0.5.5"
 description = "A Jellyfin / Emby Windows client with a Liquid Glass inspired UI"
 authors = ["you"]
 edition = "2021"
