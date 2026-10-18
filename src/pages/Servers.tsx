@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useServers, type SavedServer } from '../store/servers';
 import { formatRelativeDate, serverProtocolName, supportedServerNames } from '../api/mediaServer';
@@ -6,6 +6,8 @@ import { EmptyState } from '../components/Feedback';
 import { contextMenuProps } from '../components/ContextMenu';
 import ServerIcon from '../components/ServerIcon';
 import AddServerDialog from '../components/AddServerDialog';
+import DeleteServerDialog from '../components/DeleteServerDialog';
+import { useBrowseActivity } from '../hooks/useBrowseActivity';
 import { IconTrash, IconLibrary, IconEdit, IconPlus, IconServer, IconVideo } from '../components/icons';
 import { useServerReorder } from '../hooks/useServerReorder';
 import ServerReorderFeedback from '../components/ServerReorderFeedback';
@@ -19,7 +21,15 @@ export default function ServersPage() {
   const refreshServer = useServers((s) => s.refreshServer);
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<SavedServer | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const deleteTrigger = useRef<HTMLElement | null>(null);
+  const active = useBrowseActivity();
+  const deleting = servers.find(server => server.id === deletingId);
   const reorder = useServerReorder('grid');
+
+  useEffect(() => {
+    if (!active || !deleting) setDeletingId(null);
+  }, [active, deleting]);
 
   // Refresh every server on mount (fire and forget)
   useEffect(() => {
@@ -72,7 +82,10 @@ export default function ServersPage() {
                 {...reorder.itemProps(s.id)}
                 {...contextMenuProps([
                   { label: '编辑服务器', icon: <IconEdit size={16} />, run: () => setEditing(s) },
-                  { label: '删除服务器', icon: <IconTrash size={16} />, danger: true, run: () => { if (window.confirm('确定删除该服务器？')) removeServer(s.id); } },
+                  { label: '删除服务器', icon: <IconTrash size={16} />, danger: true, run: target => {
+                    deleteTrigger.current = target;
+                    setDeletingId(s.id);
+                  } },
                 ])}
                 className="glass-surface server-sort-item group relative min-w-0 transition-shadow hover:shadow-card-hover"
               >
@@ -128,6 +141,10 @@ export default function ServersPage() {
       <ServerReorderFeedback instructionId={reorder.instructionId} />
       {showAdd && <AddServerDialog onClose={() => setShowAdd(false)} />}
       {editing && <AddServerDialog key={editing.id} server={editing} onClose={() => setEditing(null)} />}
+      {active && deleting && <DeleteServerDialog name={deleting.name} returnFocus={deleteTrigger.current} onClose={() => setDeletingId(null)} onConfirm={() => {
+        removeServer(deleting.id);
+        setDeletingId(null);
+      }} />}
     </div>
   );
 }

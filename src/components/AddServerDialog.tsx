@@ -96,7 +96,6 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
     <div
       ref={dialogRef}
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/20 p-4 backdrop-blur-md"
-      onClick={() => { if (!loading) onClose(); }}
     >
       <LiquidGlass
         intensity="regular"
@@ -104,7 +103,6 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
         aria-modal="true"
         aria-labelledby={`${formId}-title`}
         className="w-full max-w-[420px] overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="max-h-[calc(100dvh-32px)] overflow-y-auto p-7">
         <div className="mb-6 flex items-start justify-between gap-3">

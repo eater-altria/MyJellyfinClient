@@ -4,7 +4,7 @@ import { useLocation } from 'react-router-dom';
 import { create } from 'zustand';
 import LiquidGlass from './LiquidGlass';
 
-export type ContextMenuAction = { label: string; icon: ReactNode; danger?: boolean; run: () => void | Promise<void> };
+export type ContextMenuAction = { label: string; icon: ReactNode; danger?: boolean; run: (target: HTMLElement) => void | Promise<void> };
 let nextMenuId = 0;
 type Menu = { id: number; x: number; y: number; target: HTMLElement; actions: ContextMenuAction[] };
 const useMenu = create<{ menu: Menu | null; set: (menu: Menu | null) => void }>(set => ({ menu: null, set: menu => set({ menu }) }));
@@ -95,7 +95,7 @@ function ContextMenu({ menu }: { menu: Menu }) {
         onClick={async () => {
           if (pending.current) return;
           pending.current = true; setBusy(true); setError('');
-          try { await action.run(); close(true); }
+          try { await action.run(menu.target); close(true); }
           catch { if (mounted.current) setError('操作失败，请重试'); }
           finally { pending.current = false; if (mounted.current) setBusy(false); }
         }}>{action.icon}<span>{action.label}</span></button>)}

@@ -95,6 +95,10 @@ let child, socket;
   ` }, bundle: true, write: false, format: 'iife', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"development"' } }).outputFiles[0].text;
   const page = path.join(directory, 'fixture.html');
   fs.writeFileSync(page, `<!doctype html><meta charset="utf-8"><style>${css}</style><div id="root"></div><script>${bundle.replace(/<\/script/gi, '<\\/script')}</script>`);
+  if(process.env.MJC_TEST_ARTIFACT_DIR){
+    fs.mkdirSync(process.env.MJC_TEST_ARTIFACT_DIR,{recursive:true});
+    fs.copyFileSync(page,path.join(process.env.MJC_TEST_ARTIFACT_DIR,'server-dialog-fixture.html'));
+  }
   child = spawn(browser, ['--headless=new', '--no-first-run', '--no-default-browser-check', '--disable-background-networking',
     '--remote-debugging-port=0', '--window-size=1280,800', `--user-data-dir=${path.join(directory,'profile')}`, 'about:blank'], {windowsHide:true,stdio:'ignore'});
   const deadline = Date.now()+15000;
@@ -157,17 +161,53 @@ let child, socket;
     await mouse('mouseReleased',editPoint,{button:'right',buttons:0,clickCount:1});await wait(40);
     await evaluate('[...document.querySelectorAll("[role=menuitem]")].find(button=>button.textContent.includes("编辑服务器")).click()');await wait(40);
     assert(await evaluate('!!document.querySelector("[role=dialog]")'),'Server context menu opens edit dialog');
+    await down({x:2,y:2});await up({x:2,y:2});await wait(40);
+    assert(await evaluate('!!document.querySelector("[role=dialog]")'),'Backdrop must not dismiss add/edit dialog');
     await key('Escape','Escape');await wait(40);
     await mouse('mousePressed',editPoint,{button:'right',buttons:2,clickCount:1});
     await mouse('mouseReleased',editPoint,{button:'right',buttons:0,clickCount:1});await wait(40);
-    await evaluate('window.confirm=()=>false');
-    let deletePoint=await fixture('menuPoint("删除服务器")');await down(deletePoint);await up(deletePoint);await wait(40);
+    // Emulate WKWebView's unsupported JavaScript confirm: production must never call it.
+    await evaluate('window.confirm=()=>{throw Error("window.confirm must not be used")}');
+    const openDelete=async()=>{
+      const point=await fixture('point("grid","s0")');
+      await mouse('mousePressed',point,{button:'right',buttons:2,clickCount:1});
+      await mouse('mouseReleased',point,{button:'right',buttons:0,clickCount:1});await wait(40);
+      const action=await fixture('menuPoint("删除服务器")');await down(action);await up(action);await wait(40);
+      assert(await evaluate('!!document.querySelector("dialog[open]")'),'Delete opens a real in-app confirmation');
+      assert.equal(await evaluate('document.activeElement.textContent'),'取消','Default focus must be non-destructive');
+      assert.equal(await evaluate('!!document.querySelector("[role=menu]")'),false,'Menu closes before confirmation');
+      assert(await evaluate('(()=>{const r=document.querySelector("dialog").getBoundingClientRect();return r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;})()'),'Confirmation fits the viewport');
+    };
+    const dialogClick=async(label)=>{
+      const point=await evaluate('(()=>{const r=[...document.querySelectorAll("dialog button")].find(b=>b.textContent==='+JSON.stringify(label)+').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()');
+      await down(point);await up(point);await wait(40);
+    };
+    await openDelete();
+    await order(['s0','s3','s2','s1'],'Opening confirmation must not delete');
+    if(process.env.MJC_TEST_ARTIFACT_DIR){
+      const capture=await send('Page.captureScreenshot',{format:'png'});
+      fs.writeFileSync(path.join(process.env.MJC_TEST_ARTIFACT_DIR,'server-delete-'+width+'-'+scale+'.png'),Buffer.from(capture.data,'base64'));
+    }
+    await key('Tab','Tab',8);
+    assert.equal(await evaluate('document.activeElement.textContent'),'删除','Shift+Tab stays inside modal');
+    await key('Tab','Tab');
+    assert.equal(await evaluate('document.activeElement.textContent'),'取消','Tab wraps inside modal');
+    await dialogClick('取消');
     await order(['s0','s3','s2','s1'],'Cancelled context delete');
-    await mouse('mousePressed',editPoint,{button:'right',buttons:2,clickCount:1});
-    await mouse('mouseReleased',editPoint,{button:'right',buttons:0,clickCount:1});await wait(40);
-    await evaluate('window.confirm=()=>true');
-    deletePoint=await fixture('menuPoint("删除服务器")');await down(deletePoint);await up(deletePoint);await wait(40);
-    await order(['s3','s2','s1'],'Confirmed context delete');
+    assert.equal(await fixture('focusId()'),'s0','Cancellation restores source card focus');
+    await openDelete();await key('Escape','Escape');await wait(40);
+    assert.equal(await evaluate('!!document.querySelector("dialog[open]")'),false,'Esc cancels deletion');
+    await order(['s0','s3','s2','s1'],'Esc cancellation');
+    await openDelete();await down({x:2,y:2});await up({x:2,y:2});await wait(40);
+    assert.equal(await evaluate('!!document.querySelector("dialog[open]")'),true,'Backdrop must not dismiss deletion');
+    await order(['s0','s3','s2','s1'],'Backdrop must not delete');
+    await fixture('hide()');await wait(40);
+    assert.equal(await evaluate('!!document.querySelector("dialog[open]")'),false,'Hidden page dismisses modal');
+    await reset();await openDelete();await fixture('remove("s0")');await wait(40);
+    assert.equal(await evaluate('!!document.querySelector("dialog[open]")'),false,'Deleted source dismisses modal');
+    await reset();await openDelete();await dialogClick('删除');
+    await order(['s1','s2','s3'],'Confirmed context delete');
+    assert.equal(await evaluate('!!document.querySelector("dialog[open]")'),false,'Confirmed delete closes modal');
     assert.equal(await evaluate('!!document.querySelector("[role=menu]")'),false,'Deleting its source must dismiss the menu');
     await reset();
     const ordinary=await fixture('point("grid","s0")');await down(ordinary);await move({x:ordinary.x+2,y:ordinary.y+1});await up(ordinary);await wait(40);

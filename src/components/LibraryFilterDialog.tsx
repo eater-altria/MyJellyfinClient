@@ -38,8 +38,7 @@ export default function LibraryFilterDialog({ value, options, loading, error, on
       ))}</div>
     {!values.length && !loading && !error && <p className="mt-2 text-[12px] text-text-secondary">服务器没有提供{label}选项</p>}
   </fieldset>;
-  return createPortal(<div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/20 p-3 backdrop-blur-sm"
-    onPointerDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+  return createPortal(<div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/20 p-3 backdrop-blur-sm">
     <div ref={panel} role="dialog" aria-modal="true" aria-label="筛选媒体" className="flex max-h-[85vh] w-full min-w-0 max-w-[680px]">
       <LiquidGlass className="flex min-h-0 w-full flex-col overflow-hidden rounded-[28px]" intensity="prominent">
         <div className="flex shrink-0 items-center justify-between px-5 py-4"><h2 className="text-[17px] font-semibold">筛选媒体</h2>
