@@ -5,6 +5,7 @@ import { createServerApi, getServerConnector, availableServerConnectors, DEFAULT
 import { detectServer } from '../api/detectServer';
 import { getClientIdentity } from './settings';
 import { normalizeClientIdentityText } from '../utils/clientIdentity';
+import { planServerImport, validateSyncedServers, type SyncedServer } from '../sync/serverSync';
 
 export class ServerRegistrationError extends Error {}
 
@@ -44,6 +45,7 @@ interface ServersState {
   setActive: (id: string | null) => void;
   refreshServer: (id: string) => Promise<void>;
   getApi: (id?: string | null) => MediaServerApi | null;
+  importServers: (incoming: readonly SyncedServer[], expected: readonly SavedServer[]) => void;
 }
 
 function makeApi(s: SavedServer): MediaServerApi {
@@ -82,6 +84,17 @@ export const useServers = create<ServersState>()(
       activeServerId: null,
       apis: {},
       reachability: {},
+      importServers(incoming, expected) {
+        if (get().servers !== expected) throw new Error('本地服务器配置已改变，请重新下载后合并');
+        const { servers } = planServerImport(expected, validateSyncedServers(incoming));
+        // Construct everything before committing, so malformed/unsupported imports cannot partially replace live sessions.
+        const apis = Object.fromEntries(servers.map(server => {
+          const previous = expected.find(row => row === server);
+          return [server.id, previous && get().apis[server.id] ? get().apis[server.id] : makeApi(server)];
+        }));
+        set(state => ({ servers, apis, reachability: {},
+          activeServerId: servers.some(server => server.id === state.activeServerId) ? state.activeServerId : servers[0]?.id ?? null }));
+      },
       setReachability(id, address, reachable) {
         // An old probe must not update a removed or edited connection.
         if (!get().servers.some((s) => s.id === id && s.address === address)) return;

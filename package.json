@@ -11,6 +11,7 @@
     "typecheck": "tsc -b --noEmit",
     "release": "bash scripts/release.sh",
     "test:release": "node scripts/test-release.mjs",
+    "test:sync": "node scripts/test-server-sync.cjs && node scripts/test-server-sync-ui.cjs",
     "test:servers": "node scripts/test-connectors.cjs && node scripts/test-senplayer-connection.cjs && node scripts/test-senplayer-dialog.cjs && node scripts/test-media-servers.cjs && node scripts/test-media-server-request.cjs && node scripts/test-client-user-agent.cjs && node scripts/test-server-order.cjs",
     "test:playback": "node scripts/test-playback-diagnostics.cjs && node scripts/test-playback-cancel.cjs && node scripts/test-browser-player.cjs && node scripts/test-playback-resume.cjs && node scripts/test-danmaku.cjs",
     "test:danmaku": "node scripts/test-danmaku.cjs",

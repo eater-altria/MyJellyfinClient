@@ -33,6 +33,7 @@ macOS 的媒体库接入、内嵌播放与 GPU 玻璃控件已完成验收，当
 | `src/utils/clientIdentity.ts`、`src/utils/defaultClientIdentity.json` | 客户端名称预设、共享兼容默认标识和文本规范化；设备 ID 仍由 API 使用原有持久值 |
 | `src-tauri/src/client_identity.rs` | 桌面 WebView 的真实 HTTP User-Agent、共享兼容版本、Windows 实际版本查询与 macOS 平台/架构 |
 | `src/store/servers.ts` | 服务器登录状态、令牌、API 实例和持久化 |
+| `src/components/ServerSync.tsx`、`src/sync/serverSync.ts`、`src/platform/webdav.ts`、`src-tauri/src/webdav_http.rs` | WebDAV 加密服务器会话同步、字段白名单、导入事务及独立传输 |
 | `src/hooks/useServerReorder.ts`、`src/store/serverReorder.ts`、`src/components/ServerReorderFeedback.tsx` | 两处服务器排序的指针/键盘操作、临时拖拽状态、跟随预览及插入位置 |
 | `src/store/settings.ts`、`src/pages/Settings.tsx` | 设置定义、默认值、持久化和设置界面 |
 | `src/components/UpdateCheck.tsx`、`src/api/appUpdates.ts`、`src/platform/appUpdates.ts`、`src-tauri/src/app_updates.rs` | 手动检查 GitHub 正式 Release、版本比较和固定发布页的系统浏览器入口 |
@@ -167,6 +168,18 @@ Jellyfin / Emby 的连接和媒体 API 已统一采用 SenPlayer 6.2.2 的实测
 
 共用 `PosterCard` 在左上角显示收藏星标、右下角显示已看勾选，采用共用图标与轻量玻璃圆底；无封面或关闭预览仍显示。New 和剩余时长避免与状态标记重叠。`test:home` 的真实组件回归覆盖菜单键盘/边界、失败重试、防重、状态切换和其他页面禁用；`test:servers` 覆盖服务器菜单编辑、删除确认/取消与原有拖拽排序。
 
+## WebDAV 服务器会话同步
+
+「设置 → 通用 → WebDAV 服务器同步」手动上传/下载自己的客户端配置，包含媒体令牌及其实际设备 ID，接收端合并后直接重建 API 并可播放，不要求再次输入媒体密码。旧全局设备 ID 在导出时解析为每个连接的显式值，既不迁移源连接，也不修改接收端全局设备 ID。保留已验证地址、代理前缀、协议、账号、客户端名称和 authorizationOnly；不重新发现或追加 `/emby`。同一令牌/设备 ID 共享同一服务器登录会话，撤销后需重新登录并上传；不能借用其他应用的身份。
+
+只同步白名单字段，不包含媒体密码、活动服务器、错误、统计、日志、图片和其他设置。载荷格式带版本并在解密后严格校验，未知连接器、无效地址/身份、重复 ID 或超限拒绝整个导入。PBKDF2-SHA256 600000 次、16 字节随机盐与 AES-256-GCM 12 字节随机 nonce，加密口令至少 10 字符；云端只收到密文。WebDAV 目录/账号存于 `mjc:webdav`，密码和加密口令只在当前设置视图内存中，隐藏/卸载时清理并取消请求，迟到结果不能导入或更新 UI。
+
+固定读写已有目录下 `myjellyfinclient-servers-v1.json`，公网须 HTTPS；RFC1918 私有 IPv4、IPv6 ULA、链路本地 IP 和本机回环/localhost 可 HTTP，IPv4 映射 IPv6 按内嵌 IPv4 分类。前端及原生均按 URL 解析后的 IP 判断，不按域名前缀或 DNS 结果猜测；共用 `scripts/fixtures/webdav-addresses.json` 验证网段边界与伪装域名。桌面独立命令仅支持此文件 GET/条件 PUT；HTTPS 保持系统 TLS、不带 Cookie、不跟随重定向、不重试、30 秒、2 MiB 上限，不放宽媒体 HTTP 桥。浏览器保留 fetch/CORS 及混合内容限制；需服务端允许方法/鉴权/条件头并暴露 ETag。上传准备先读取并解密原文件，确认后使用强 ETag 的 If-Match；首次创建使用 If-None-Match: *，412 提示重新读取，不覆盖冲突。服务器不提供强 ETag 时拒绝覆盖已有文件。
+
+下载确认显示新增/更新/保留数量，采用云端顺序并保留本机独有连接。按连接 ID 优先匹配，唯一的同协议/地址/账号连接复用本机 ID；不混合不同账号的令牌/设备身份。提交前检查本机列表仍为预览时版本，先完成验证和 API 构造再一次更新，替换相关旧 API 以清除旧浏览页面身份，活动服务器保持本机选择。只在明确点击时传输，不增加后台或自动同步。
+
+`npm run test:sync` 覆盖合成两设备/重启、Jellyfin/Emby 的免登录媒体库与播放协商、旧/显式设备身份、原地址/代理、密文随机性/篡改/错误口令/版本、原子合并、条件创建/冲突、IPC 取消竞态和真实 Settings/React/Chromium 的 CORS/确认/重试/隐藏/窄窗口及 DPI。Rust `webdav_http` 使用真实本机 HTTP fixture 验证条件头、凭据隔离、错误正文不转发、大小、重定向和任务取消。不能将 fixture 验证描述为真实网盘、Windows 原生传输或 Mac 解码已验收。
+
 ## 弹幕
 
 「设置 → 弹幕」配置启用状态（默认关闭）、服务器插件/自定义 API、API 地址、不透明度、逻辑字号、显示区域、显示时长与 ±600 秒时间偏移，保存和读取均校验边界。原生和浏览器控制栏提供开关，关闭使用斜杠图标，状态保存到原有设置。原生窄窗口增加按钮后重新计算布局，保留原有倍速/字幕/音轨入口。
@@ -244,6 +257,7 @@ npm run build
 npm run test:home
 npm run test:servers
 npm run test:settings
+npm run test:sync
 npm run test:playback
 npm run test:ui
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/test-mpv-setup.ps1

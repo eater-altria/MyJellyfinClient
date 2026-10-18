@@ -1,0 +1,41 @@
+{
+  "allowed": [
+    "http://10.0.0.1:8080/proxy/dav/",
+    "http://10.255.255.255/dav",
+    "http://172.16.0.1/dav",
+    "http://172.31.255.255/dav",
+    "http://192.168.0.1/dav",
+    "http://192.168.255.255/dav",
+    "http://169.254.1.1/dav",
+    "http://127.0.0.2/dav",
+    "http://localhost:8080/dav",
+    "http://[::1]/dav",
+    "http://[fc00::1]/dav",
+    "http://[fd12::1]:8080/dav",
+    "http://[fe80::1]/dav",
+    "http://[febf::1]/dav",
+    "http://[::ffff:192.168.0.1]/dav",
+    "https://fixture.invalid/dav"
+  ],
+  "denied": [
+    "http://9.255.255.255/dav",
+    "http://11.0.0.1/dav",
+    "http://172.15.255.255/dav",
+    "http://172.32.0.1/dav",
+    "http://192.167.255.255/dav",
+    "http://192.169.0.1/dav",
+    "http://169.253.255.255/dav",
+    "http://[fe7f::1]/dav",
+    "http://[fec0::1]/dav",
+    "http://[2001:db8::1]/dav",
+    "http://[::ffff:203.0.113.1]/dav",
+    "http://0.0.0.0/dav",
+    "http://10.0.0.1.fixture.invalid/dav",
+    "http://localhost.fixture.invalid/dav",
+    "http://fixture.invalid/dav",
+    "ftp://192.168.0.1/dav",
+    "http://user:pass@192.168.0.1/dav",
+    "http://192.168.0.1/dav?secret=x",
+    "http://192.168.0.1/dav#fragment"
+  ]
+}

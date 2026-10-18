@@ -72,6 +72,7 @@ const imports = {
   '../store/settings': { ...mod.exports, useSettings: settingsStore },
   '../platform/window': platform, '../components/Toggle': { default: 'Toggle' }, '../components/LiquidGlass': { default: 'Glass' },
   '../components/UpdateCheck': { default: 'UpdateCheck' },
+  '../components/ServerSync': { default: 'ServerSync' },
   '../components/icons': new Proxy({}, { get: () => 'Icon' }),
 };
 new Function('require', 'module', 'exports', settingsCode)(name => imports[name] ?? require(name), settingsModule, settingsModule.exports);

@@ -9,6 +9,7 @@ mod playback_diagnostics;
 mod client_identity;
 mod app_updates;
 mod media_server_http;
+mod webdav_http;
 
 use player::PlayerState;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
@@ -18,7 +19,10 @@ pub fn run() {
     tauri::Builder::default()
         .manage(PlayerState::default())
         .manage(media_server_http::MediaServerHttp::default())
+        .manage(webdav_http::WebDavHttp::default())
         .invoke_handler(tauri::generate_handler![
+            webdav_http::start_webdav_request,
+            webdav_http::cancel_webdav_request,
             media_server_http::start_media_server_request,
             media_server_http::cancel_media_server_request,
             app_updates::open_project_releases,
