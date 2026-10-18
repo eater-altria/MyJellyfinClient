@@ -13,12 +13,17 @@ interface NativeResponse {
   url: string;
 }
 
-/** Desktop API traffic uses the system TLS stack and the shared RodelPlayer UA.
+/** Desktop API traffic uses system TLS and a validated standard/compatibility UA.
  * Browser builds retain fetch/CORS; never retry a login through another transport.
  */
 export async function mediaServerRequest(url: string, options: MediaServerRequestOptions = {}): Promise<Response> {
   const { publicDiscovery = false, ...init } = options;
-  if (!isTauri) return fetch(url, init);
+  if (!isTauri) {
+    // Browsers own User-Agent. Do not add an unsupported CORS request header.
+    const headers = new Headers(init.headers);
+    headers.delete('User-Agent');
+    return fetch(url, { ...init, headers });
+  }
   const signal = init.signal;
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   const requestId = crypto.randomUUID();

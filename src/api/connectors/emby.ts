@@ -1,14 +1,17 @@
-import { mediaBrowserAuthHeader } from './mediaBrowserAuth';
+import { getDeviceId } from './mediaBrowserAuth';
+import { SENPLAYER_CLIENT_IDENTITY, SENPLAYER_USER_AGENT, senPlayerAuthHeader, senPlayerClientIdentity } from './senPlayerCompatibility';
 import { MediaBrowserApi } from './MediaBrowserApi';
 import { ApiError, normalizeLibraryFilters } from '../helpers';
 import type { LibraryFilterOptions } from '../types';
 import type { ApiConnection, ServerConnector } from './types';
 import { discoverMediaBrowser, type MediaBrowserDiscoveryConfig } from './mediaBrowserDiscovery';
+import { senPlayerEmbyApiAddress } from './senPlayerCompatibility';
 
 export class EmbyConnectorApi extends MediaBrowserApi {
   protected readonly authScheme = 'Emby';
   constructor(connection: ApiConnection) {
-    super(connection.address, connection.token, connection.userId, 'emby', connection.identity,
+    super(connection.address,
+      connection.token, connection.userId, 'emby', connection.identity,
       connection.deviceId, connection.authorizationOnly);
   }
 
@@ -65,9 +68,11 @@ export class EmbyConnectorApi extends MediaBrowserApi {
 export const embyConnector: ServerConnector & MediaBrowserDiscoveryConfig & { readonly id: 'emby' } = {
   id: 'emby', name: 'Emby', icon: 'emby',
   clientNamePresets: ['Emby Theater', 'Emby Web', 'Emby for Android', 'Infuse', 'SenPlayer'],
+  fixedClientIdentity: SENPLAYER_CLIENT_IDENTITY,
   supportsDeviceRegistration: true, requiresNativePlaybackInfo: true,
   discover: discoverMediaBrowser,
-  publicHeaders: identity => ({ 'X-Emby-Authorization': mediaBrowserAuthHeader(identity, undefined, 'Emby'), Accept: 'application/json' }),
+  loginAddress: senPlayerEmbyApiAddress,
+  publicHeaders: identity => ({ 'X-Emby-Authorization': senPlayerAuthHeader(senPlayerClientIdentity(identity), getDeviceId()), Accept: '*/*', 'User-Agent': SENPLAYER_USER_AGENT }),
   apiAliases: [{ path: '/emby', order: 1 }, { path: '/mediabrowser', order: 3 }],
   preferApiAlias: true,
   matchPublicInfo(info, headers) {

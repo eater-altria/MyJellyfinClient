@@ -29,19 +29,21 @@ async function load(desktop) {
   handler = async (command, args) => {
     assert.equal(command, 'start_media_server_request');
     const {request, onResponse} = args;
-    assert(request.headers['x-emby-authorization'].startsWith('Emby '));
-    assert(request.headers['x-emby-authorization'].includes('Client="RodelPlayer"'));
+    assert(request.headers['x-emby-authorization'].startsWith('MediaBrowser '));
+    assert(request.headers['x-emby-authorization'].includes('Client="SenPlayer"'));
+    assert.equal(request.headers.authorization, undefined);
+    assert.equal(request.headers['user-agent'], 'SenPlayer/6.2.2');
     let body;
     if (request.url.endsWith('/System/Info/Public')) {
-      assert(request.publicDiscovery);
-      assert(!request.headers['x-emby-authorization'].includes('Token='));
+      assert(!request.publicDiscovery);
+      assert(request.headers['x-emby-authorization'].includes('Token="fixture-token"'));
       body = {Id: 'fixture-server', Version: '4.9.5.0'};
     } else if (request.url.endsWith('/Users/AuthenticateByName')) {
-      assert.deepEqual(JSON.parse(request.body), {Username: 'tester', Pw: 'fixture-password'});
+      assert.deepEqual(JSON.parse(request.body), {Username: 'tester', Pw: 'fixture-password', Password: 'fixture-password'});
       assert(!request.publicDiscovery);
       body = {User: {Id: 'fixture-user', Name: 'tester'}, AccessToken: 'fixture-token'};
     } else {
-      assert(request.headers.authorization.includes('Token="fixture-token"'));
+      assert(request.headers['x-emby-authorization'].includes('Token="fixture-token"'));
       body = {Items: [{Id: 'library'}], TotalRecordCount: 1};
     }
     onResponse.onmessage({Ok: {url: request.url, status: 200, headers: {'content-type': 'application/json'}, body: JSON.stringify(body)}});
@@ -91,5 +93,5 @@ async function load(desktop) {
   const browserResponse = new Response('{}');
   global.fetch = async (url, options) => { assert.equal(url, 'https://fixture.invalid'); assert(!('publicDiscovery' in options)); return browserResponse; };
   assert.equal(await browser.mediaServerRequest('https://fixture.invalid', {publicDiscovery: true}), browserResponse);
-  console.log('PASS: native discovery/login/library/store rebuild, IPC cancellation race, late response isolation, HTTP status and browser fetch fallback');
+  console.log('PASS: native SenPlayer login/metadata/library/store rebuild, IPC cancellation race, late response isolation, HTTP status and browser fetch fallback');
 })().catch(error => { console.error(error); process.exitCode = 1; });

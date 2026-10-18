@@ -151,6 +151,13 @@ function ClientIdentitySection({ protocol }: { protocol: ClientIdentityProtocol 
   const [custom, setCustom] = useState(false);
   const isPreset = presets.some(preset => preset === name);
   const selected = custom || (name && !isPreset) ? 'custom' : name || 'default';
+  const fixed = getServerConnector(protocol).fixedClientIdentity;
+  if (fixed) return <Section label={`${product} 客户端标识`}
+    footnote={`登录和媒体 API 统一使用 ${fixed.name} 方式。设备名称可修改，设备 ID 保持稳定；浏览器版仍由浏览器管理 HTTP 标识。`}>
+    <Row label="客户端名称"><span className="text-[13px] text-text-secondary">{fixed.name}</span></Row>
+    <Row label="客户端版本"><span className="text-[13px] text-text-secondary">{fixed.version}</span></Row>
+    <IdentityTextRow protocol={protocol} label="设备名称" field="deviceName" placeholder={DEFAULT_CLIENT_IDENTITY.deviceName} />
+  </Section>;
   return <Section label={`${product} 客户端标识`}
     footnote={`用于 ${product} 的登录与服务器鉴权，留空使用 RodelPlayer 默认标识，按回车或离开输入框保存。桌面版 HTTP User-Agent 统一采用小幻格式；这些字段仅调整鉴权标识。${getServerConnector(protocol).supportsDeviceRegistration ? '重新登记连接时填写的客户端名称优先于此预设；已有设备可能保留首次登记信息。' : '预设改变后用于后续请求；服务器显示的信息可能暂时保留。'}`}>
     <Row label="客户端预设">

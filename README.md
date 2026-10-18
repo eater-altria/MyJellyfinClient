@@ -17,7 +17,7 @@
 
 ## Jellyfin / Emby 服务器
 
-添加时选择 Jellyfin 或 Emby（默认 Jellyfin），再输入服务器地址、用户名和密码。程序校验公共系统信息并探测 `/emby`、`/jellyfin` 和旧版 `/mediabrowser` API 路径，始终使用所选协议，不因服务端产品名称改变选择。未指定协议的兼容 API 调用仍按产品标识、响应头和版本自动识别。支持带反向代理路径的地址和复制的 `/web/index.html` 地址。
+添加时选择 Jellyfin 或 Emby（默认 Jellyfin），再输入服务器地址、用户名和密码。程序按所选协议直接登录：新建 Emby 入口幂等补 `/emby`，Jellyfin 保留输入路径；登录后读取公开信息，失败不丢有效登录，不因服务端产品名称改变协议。未指定协议的兼容 API 调用仍按产品标识、响应头和版本自动识别。支持带反向代理路径的地址和复制的 `/web/index.html` 地址。
 
 所选协议和实际 API 地址会在登录成功后与令牌一起保存，服务器卡片和侧栏使用不同图标。原有未记录类型的服务器按 Jellyfin 加载。修改类型、地址或重新登录时重新验证，失败保留原连接。
 
@@ -25,11 +25,11 @@
 
 服务器卡片和左侧已连接列表均可按住拖拽排序，拖动时显示带图标和名称的跟随预览，松开后两处顺序同步保存，重启仍保留。也可跨区域拖放；Esc 取消，Alt+↑/↓ 可用键盘调整顺序。拖动到长列表边缘时自动滚动。
 
-「设置 → 通用」可分别调整 Jellyfin / Emby 的客户端名称、版本和设备名称；默认使用 RodelPlayer / 2.2610.12.0 / Windows PC 兼容标识，已手动设置的值保持不变。桌面 WebView 的 HTTP User-Agent 统一使用相同名称和版本，并附带平台信息：Windows 为实际系统版本与架构，macOS 为平台与架构。这里的客户端兼容版本与本应用的 Release 版本不同；mpv 媒体请求仍使用原有 User-Agent。
+「设置 → 通用」显示固定的 SenPlayer / 6.2.2 客户端名称和版本，并可分别调整两种协议的设备名称。已保存的令牌、设备 ID、账号和有效入口保持不变；旧模式标记不再影响请求。桌面 WebView 及 mpv 的 User-Agent 保持原实现。
 
-桌面的 Jellyfin/Emby 探测、登录和媒体库 API 使用原生 HTTP，支持未配置浏览器 CORS 的服务器，并沿用上述固定 RodelPlayer HTTP User-Agent 和系统 TLS 证书校验。请求支持取消，不自动重放登录；跨域重定向不会转发账号凭据。浏览器开发模式继续使用浏览器 fetch，需要服务器允许跨域访问。
+桌面的 Jellyfin/Emby 探测、登录和媒体库 API 使用原生 HTTP，固定 `SenPlayer/6.2.2` UA，保留系统 TLS、取消和重定向凭据隔离，登录失败不重放。浏览器仍使用自身 UA 与 fetch/CORS；已验证的 Authorization-only 旧连接保持兼容。
 
-部分 Emby 服务按首次设备登记限制播放。若登录正常但播放被拒绝，可在「编辑服务器」显式选择「重新登记此服务器的登录设备」，填写服务端支持的客户端名称并重新输入密码。成功后仅该连接保存新的固定设备 ID 和名称；不会重置其他连接或全局设备身份，也不会借用其他应用的令牌。
+部分 Emby 服务按首次设备登记限制播放。若登录正常但播放被拒绝，可在「编辑服务器」显式选择「重新登记此服务器的登录设备」并重新输入密码。仅该连接生成新设备 ID，客户端身份固定为 SenPlayer；其他连接和全局 ID 不变，不借用其他应用令牌。
 
 首页轮播提供当前服务器的搜索入口。搜索页保留服务器范围、查询内容和失败重试，空状态不会产生多余的空白滚动。
 
@@ -128,6 +128,12 @@ macOS 的 shell 入口默认选择桌面模式，只为当前进程使用本机 
 
 开发服务默认使用 5173 端口，退出启动命令可停止服务。浏览器采用 HTML5/HLS 回退播放器，支持的编码由浏览器决定；它不能替代桌面原生验证。Linux 当前默认运行 Web 模式。
 
+### SenPlayer 连接方式
+
+所有 Jellyfin / Emby 连接和媒体 API 直接使用 SenPlayer 6.2.2 的实测传输格式，无需勾选兼容选项。两者均用 MediaBrowser 鉴权前缀，Emby 默认使用 X-Emby-Authorization，Jellyfin 双头；登录正文包含 Username、Pw 和 Password，登录后原样使用服务器令牌。
+
+新建 Emby 登录补齐 `/emby`，已有连接继续使用已验证入口，避免破坏根路径或代理路径。设备 ID 保持稳定、密码不保存，公开信息失败不阻断有效登录。逆向证据和验证范围见 [连接行为记录](docs/senplayer-connection.md)。
+
 ### 扩展服务器连接器
 
 后端实现位于 `src/api/connectors/`。`mediaServer.ts` 是页面使用的稳定入口，`detectServer.ts` 调度公开探测，`store/servers.ts` 负责登录结果的原子保存和 API 缓存。Jellyfin 与 Emby 各有独立连接器，共用 `MediaBrowserApi` 的 REST 实现；独立协议可直接实现 `connectors/types.ts` 中的 `MediaServerApi`。
@@ -135,7 +141,7 @@ macOS 的 shell 入口默认选择桌面模式，只为当前进程使用本机 
 新增后端只需实现连接器模块并在 `connectors/index.ts` 注册，不需要修改服务器管理、设置和播放器页面：
 
 1. 实现媒体 API 契约，将后端响应转换成 `api/types.ts` 的统一模型，提供登录、列表、详情、筛选、播放协商、图片/媒体 URL、收藏和进度上报等操作。`ApiConnection` 传入地址、令牌、账号、动态客户端标识函数以及可选设备 ID、鉴权兼容模式；标识按请求读取，避免缓存旧设置。收藏和已看变化使用 `updateBrowseUserData` 通知保留页面。
-2. 导出 `ServerConnector`：稳定 `id`、显示名称、客户端名称预设、`publicHeaders`、`discover` 和 `createApi`。`supportsDeviceRegistration` 控制连接的显式设备重新登记；`requiresNativePlaybackInfo` 控制原生直播放前是否必须协商。可选 `icon` 使用现有品牌图标，省略时自动使用通用服务器图标。
+2. 导出 `ServerConnector`：稳定 `id`、显示名称、客户端名称预设、`publicHeaders`、`discover` 和 `createApi`。`supportsDeviceRegistration` 控制连接的显式设备重新登记；`requiresNativePlaybackInfo` 控制原生直播放前是否必须协商。可选 `loginAddress` 表示支持手选协议后直接登录，并返回登录 API 入口；省略时仍先探测。可选 `fixedClientIdentity` 独立声明固定名称/版本，控制设置页静态显示和设备登记表单，不与是否直接登录混为同一能力。可选 `icon` 使用现有品牌图标，省略时自动使用通用服务器图标。
 3. 在注册表导入并增加一项，键与 `id` 保持一致。例如连接器模块导出 `acmeConnector` 后：
 
 ```ts

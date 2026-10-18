@@ -21,8 +21,8 @@ const fixtures = {
   '/manual/emby': {protocol:'emby', info:{Id:'manual-emby',Version:'99.0.0',ProductName:'Jellyfin Server'}},
   '/manual-jf': {protocol:'jellyfin', info:{Id:'manual-jf',Version:'4.0.0',ProductName:'Emby Server'}},
   '/fallback/emby': {protocol:'emby', info:{Id:'fallback',Version:'4.8.0.0'}},
-  '/client-jf': {protocol:'jellyfin', client:'Jellyfin Web', info:{Id:'client-jf',Version:'12.0.0',ProductName:'Jellyfin Server'}},
-  '/client-emby': {protocol:'emby', client:'Emby Theater', info:{Id:'client-emby',Version:'4.9.1.0',ProductName:'Emby Server'}},
+  '/client-jf': {protocol:'jellyfin', client:'SenPlayer', info:{Id:'client-jf',Version:'12.0.0',ProductName:'Jellyfin Server'}},
+  '/client-emby': {protocol:'emby', client:'SenPlayer', info:{Id:'client-emby',Version:'4.9.1.0',ProductName:'Emby Server'}},
   '/registration/emby': {protocol:'emby', info:{Id:'registration-emby',Version:'4.9.1.0',ProductName:'Emby Server'}},
 };
 const movie = {Id:'movie',Name:'Fixture film',Type:'Movie',MediaSources:[{Id:'source',Container:'mkv',SupportsDirectPlay:true,Size:123,MediaStreams:[{Type:'Video',Codec:'hevc',Width:3840,Height:2160}]}]};
@@ -41,24 +41,23 @@ const server = http.createServer(async (req,res) => {
   let token=fixture.protocol+'-token';
   if (prefix==='/registration/emby' && path==='/Videos/movie/stream') {
     const registration=[...deviceRegistrations.values()].find(row=>row.token===url.searchParams.get('api_key'));
-    if (registration?.client==='Supported Fixture Client') {res.writeHead(206,{'Content-Type':'video/mp4'});res.end('fixture-media');return;}
+    if (registration?.allowed) {res.writeHead(206,{'Content-Type':'video/mp4'});res.end('fixture-media');return;}
     res.writeHead(302,{Location:'/fixture-error-video'});res.end();return;
   }
   if (fixture.client && headerField(req.headers.authorization ?? req.headers['x-emby-authorization'], 'Client') !== fixture.client) {
     return json({message:'fixture client restriction'},403);
   }
   if (path === '/System/Info/Public') return json(fixture.info);
-  const scheme=fixture.protocol==='emby' ? 'Emby ' : 'MediaBrowser ';
-  if (!req.headers.authorization?.startsWith(scheme)) return json({message:'wrong protocol header'},401);
-  // Emby reverse proxies may authenticate this header independently of Authorization.
-  if (fixture.protocol==='emby' && !req.headers['x-emby-authorization']?.startsWith(scheme)) {
-    return json({message:'wrong Emby authorization scheme'},401);
+  const authorization=req.headers['x-emby-authorization'];
+  if (!authorization?.startsWith('MediaBrowser ')
+    || (fixture.protocol==='jellyfin' ? req.headers.authorization!==authorization : req.headers.authorization!==undefined)) {
+    return json({message:'wrong SenPlayer protocol headers'},401);
   }
   if (path === '/Users/AuthenticateByName') {
     if (JSON.parse(body).Pw !== 'test-password') return json({message:'invalid login'},401);
     if (prefix==='/registration/emby') {
-      const device=headerField(req.headers.authorization,'DeviceId');
-      if (!deviceRegistrations.has(device)) deviceRegistrations.set(device,{client:headerField(req.headers.authorization,'Client'),token:'registration-token-'+deviceRegistrations.size});
+      const device=headerField(req.headers['x-emby-authorization'],'DeviceId');
+      if (!deviceRegistrations.has(device)) deviceRegistrations.set(device,{client:headerField(req.headers['x-emby-authorization'],'Client'),token:'registration-token-'+deviceRegistrations.size,allowed:deviceRegistrations.size>0});
       token=deviceRegistrations.get(device).token;
     }
     return json({AccessToken:token,ServerId:fixture.info.Id,User:{Id:'user',Name:'tester'}});
@@ -90,8 +89,8 @@ const server = http.createServer(async (req,res) => {
   const brandedApi=new MediaServerApi(branded.address,undefined,undefined,branded.protocol);
   const brandedLogin=await brandedApi.authenticate('tester','test-password');
   assert.equal(brandedLogin.token,'emby-token');
-  assert.equal(calls.at(-1).headers.authorization,calls.at(-1).headers['x-emby-authorization']);
-  assert(calls.at(-1).headers.authorization.startsWith('Emby '));
+  assert.equal(calls.at(-1).headers.authorization,undefined);
+  assert(calls.at(-1).headers['x-emby-authorization'].startsWith('MediaBrowser '));
   const emby=await detectServer(origin+'/proxy');assert.equal(emby.protocol,'emby');assert.equal(emby.address,origin+'/proxy/emby');
   assert.equal((await detectServer(origin+'/fallback')).address,origin+'/fallback/emby');
   assert.equal((await detectServer(origin+'/proxy/emby/web/index.html')).address,emby.address);
@@ -107,12 +106,13 @@ const server = http.createServer(async (req,res) => {
   };
   try {
     global.fetch = async (url, options) => {
-      discoveryCalls.push({url:String(url),headers:options.headers});
+      discoveryCalls.push({url:String(url),headers:Object.fromEntries(new Headers(options.headers))});
       return fakeResponse(publicInfo, 'https://metadata.fixture.invalid/System/Info/Public');
     };
     const redirected = await detectServer('https://media.fixture.invalid');
     assert.equal(redirected.address, 'https://media.fixture.invalid/emby', 'Emby media origin must survive cross-origin public redirects');
-    assert(discoveryCalls.every(call => !call.headers.Authorization && !call.headers['X-Emby-Token']), 'Cross-origin public discovery must never send account credentials');
+    assert(discoveryCalls.every(call => !call.headers['x-emby-token']
+      && !Object.values(call.headers).some(value => /(?:Token|UserId)=/.test(value))), 'Cross-origin public discovery must never send account credentials');
     const samePrefix = new MediaServerApi(redirected.address, 'fixture-token', 'fixture-user', 'emby');
     assert.equal(new URL(samePrefix.directStreamUrl('movie', 'source', 'session', {Id:'source',DirectStreamUrl:'/Videos/movie/original.mkv'})).pathname,
       '/emby/Videos/movie/original.mkv', 'Relative direct streams must retain the validated Emby prefix');
@@ -133,7 +133,7 @@ const server = http.createServer(async (req,res) => {
   await assert.rejects(detectServer(origin+'/slow',{timeoutMs:25}),ServerDetectionError);
   const controller=new AbortController();controller.abort();
   await assert.rejects(detectServer(origin+'/jf',{signal:controller.signal}),{name:'AbortError'});
-  assert(calls.filter(c=>c.path.endsWith('/System/Info/Public')).every(c=>!c.headers.authorization && !c.body),'Discovery must not send credentials');
+  assert(calls.filter(c=>c.path.endsWith('/System/Info/Public')).every(c=>!c.body),'Discovery must not send a credential body');
   assert(calls.filter(c=>c.path.endsWith('/System/Info/Public')).every(c=>!c.headers['x-emby-token']
     && !c.headers['x-emby-authorization']?.includes('Token=') && !c.headers['x-emby-authorization']?.includes('UserId=')), 'Discovery metadata must contain no account credentials');
   console.log('PASS: automatic product detection, legacy versions, API prefixes, proxy/web URLs, redirects, invalid responses, timeouts and cancellation');
@@ -142,8 +142,8 @@ const server = http.createServer(async (req,res) => {
     const unauth=new MediaServerApi(detected.address,undefined,undefined,detected.protocol);
     const auth=await unauth.authenticate('tester','test-password');
     const login=calls.at(-1);
-    assert.equal(login.headers['x-emby-authorization'],login.headers.authorization,'Both authorization headers must use the server protocol');
-    assert.deepEqual(login.body,{Username:'tester',Pw:'test-password'},'Password login exchanges the credentials directly, without client-side password hashing');
+    assert.equal(login.headers.authorization,detected.protocol==='jellyfin'?login.headers['x-emby-authorization']:undefined,'SenPlayer uses dual Jellyfin headers and only the Emby X header');
+    assert.deepEqual(login.body,{Username:'tester',Pw:'test-password',Password:'test-password'},'Password login exchanges the credentials directly, without client-side password hashing');
     assert.equal(auth.token,detected.protocol+'-token','Preserve the server-issued AccessToken verbatim');
     await assert.rejects(unauth.authenticate('tester','wrong-password'),ApiError);
     const api=new MediaServerApi(detected.address,auth.token,auth.userId,detected.protocol);
@@ -154,7 +154,7 @@ const server = http.createServer(async (req,res) => {
     await assert.rejects(api.getEpisodes('series','season',controller.signal),{name:'AbortError'},'Episode requests must forward cancellation in both protocols');
     await api.getPersonItems('person');await api.search('fixture');await api.getPlayedItems();
     const playback=await api.getPlaybackInfo('movie','native');assert.equal(playback.PlaySessionId,'session');
-    const request=calls.at(-1);assert.equal(request.body.DeviceProfile.Name,DEFAULT_CLIENT_IDENTITY.name+' mpv');
+    const request=calls.at(-1);assert.equal(request.body.DeviceProfile.Name,'SenPlayer mpv');
     assert(request.body.DeviceProfile.DirectPlayProfiles[0].Container.includes('mkv'));
     if (detected.protocol==='emby') assert.equal(request.params.get('UserId'),'user');
     await api.getPlaybackInfo('movie','web');assert.equal(calls.at(-1).body.DeviceProfile.DirectPlayProfiles[0].VideoCodec,'h264');
@@ -196,7 +196,7 @@ const server = http.createServer(async (req,res) => {
   const manualJf=await state.addServer(origin+'/manual-jf','tester','test-password','Manual Jellyfin',undefined,'jellyfin');
   assert.equal(manualJf.protocol,'jellyfin');assert.equal(manualJf.token,'jellyfin-token');
   const manualProbe=calls.find(c=>c.path==='/manual/emby/System/Info/Public');
-  assert(manualProbe.headers['x-emby-authorization'].startsWith('Emby '));
+  assert(manualProbe.headers['x-emby-authorization'].startsWith('MediaBrowser '));
   const manualBefore=calls.length;
   await state.updateServer(manualEmby.id,{name:'Manual renamed',address:manualEmby.address,username:'tester',protocol:'emby'});
   assert.equal(calls.length,manualBefore,'Unchanged manually selected protocol preserves login');
@@ -219,15 +219,16 @@ const server = http.createServer(async (req,res) => {
   useSettings.getState().setClientIdentity('emby', 'deviceName', '测试电脑 "Desk", DeviceId="changed');
   await existingApi.search('identity');
   let request = calls.at(-1);
-  for (const header of [request.headers.authorization, request.headers['x-emby-authorization']]) {
-    assert.equal(headerField(header, 'Client'), 'Infuse');
-    assert.equal(headerField(header, 'Version'), '9.8.7');
+  assert.equal(request.headers.authorization, undefined);
+  for (const header of [request.headers['x-emby-authorization']]) {
+    assert.equal(headerField(header, 'Client'), 'SenPlayer');
+    assert.equal(headerField(header, 'Version'), '6.2.2');
     assert.equal(headerField(header, 'Device'), '测试电脑 "Desk", DeviceId="changed');
     assert.equal(headerField(header, 'DeviceId'), stableDevice, 'Changing metadata must preserve the device ID');
   }
   assert.equal(request.headers['x-emby-token'], 'emby-token');
   await existingApi.getPlaybackInfo('movie', 'native');
-  assert.equal(calls.at(-1).body.DeviceProfile.Name, 'Infuse mpv');
+  assert.equal(calls.at(-1).body.DeviceProfile.Name, 'SenPlayer mpv');
   assert(calls.at(-1).body.DeviceProfile.DirectPlayProfiles[0].Container.includes('mkv'), 'A name preset must preserve actual mpv capabilities');
   useSettings.persist.rehydrate();
   assert.equal(getClientIdentity('emby').name, 'Infuse');
@@ -235,40 +236,40 @@ const server = http.createServer(async (req,res) => {
   useSettings.getState().setClientIdentity('jellyfin', 'name', 'Jellyfin Web');
   const independentJf = new MediaServerApi(jf.address, 'jellyfin-token', 'user', 'jellyfin', () => getClientIdentity('jellyfin'));
   await independentJf.search('scope');
-  assert.equal(headerField(calls.at(-1).headers.authorization, 'Client'), 'Jellyfin Web');
+  assert.equal(headerField(calls.at(-1).headers['x-emby-authorization'], 'Client'), 'SenPlayer');
   await existingApi.search('scope');
-  assert.equal(headerField(calls.at(-1).headers.authorization, 'Client'), 'Infuse', 'Jellyfin edits must not affect an existing Emby API');
+  assert.equal(headerField(calls.at(-1).headers['x-emby-authorization'], 'Client'), 'SenPlayer', 'Jellyfin edits must not affect an existing Emby API');
   useServers.setState({apis:{}});
   await useServers.getState().getApi(savedEmby.id).getUserViews();
-  assert.equal(headerField(calls.at(-1).headers.authorization, 'Client'), 'Infuse', 'Rebuilt APIs must retain the identity provider');
+  assert.equal(headerField(calls.at(-1).headers['x-emby-authorization'], 'Client'), 'SenPlayer', 'Rebuilt APIs must retain the identity provider');
   useSettings.getState().reset();
   await existingApi.search('defaults');
-  assert.equal(headerField(calls.at(-1).headers.authorization, 'Client'), DEFAULT_CLIENT_IDENTITY.name);
-  assert.equal(headerField(calls.at(-1).headers.authorization, 'Version'), DEFAULT_CLIENT_IDENTITY.version);
+  assert.equal(headerField(calls.at(-1).headers['x-emby-authorization'], 'Client'), 'SenPlayer');
+  assert.equal(headerField(calls.at(-1).headers['x-emby-authorization'], 'Version'), '6.2.2');
   useSettings.getState().reset();
-  await assert.rejects(detectServer(origin + '/client-jf'), ServerDetectionError);
-  await assert.rejects(detectServer(origin + '/client-emby'), ServerDetectionError);
+  assert.equal((await detectServer(origin + '/client-jf')).protocol, 'jellyfin');
+  assert.equal((await detectServer(origin + '/client-emby')).protocol, 'emby');
   useSettings.getState().setClientIdentity('jellyfin', 'name', 'Jellyfin Web');
   useSettings.getState().setClientIdentity('emby', 'name', 'Emby Theater');
-  for (const [prefix, client] of [['/client-jf', 'Jellyfin Web'], ['/client-emby', 'Emby Theater']]) {
+  for (const [prefix, client] of [['/client-jf', 'SenPlayer'], ['/client-emby', 'SenPlayer']]) {
     const connected = await useServers.getState().addServer(origin + prefix, 'tester', 'test-password', 'Client fixture');
     await useServers.getState().getApi(connected.id).getPlaybackInfo('movie', 'native');
     request = calls.at(-1);
-    assert.equal(headerField(request.headers.authorization, 'Client'), client);
+    assert.equal(headerField(request.headers['x-emby-authorization'], 'Client'), client);
     assert.equal(request.body.DeviceProfile.Name, `${client} mpv`);
     const login = calls.findLast(call => call.path === prefix + '/Users/AuthenticateByName');
-    assert.equal(headerField(login.headers.authorization, 'Client'), client, 'Login must use the selected client');
+    assert.equal(headerField(login.headers['x-emby-authorization'], 'Client'), client, 'Login must use SenPlayer even with legacy custom settings');
     assert.equal(storage.get('mjc:deviceId'), stableDevice);
   }
   useSettings.getState().reset();
   for (const protocol of ['jellyfin', 'emby']) useSettings.getState().setClientIdentity(protocol, 'name', 'SenPlayer');
   for (const api of [independentJf, existingApi]) {
     await api.getPlaybackInfo('movie', 'native');
-    assert.equal(headerField(calls.at(-1).headers.authorization, 'Client'), 'SenPlayer', 'SenPlayer must apply to both protocols');
+    assert.equal(headerField(calls.at(-1).headers['x-emby-authorization'], 'Client'), 'SenPlayer', 'SenPlayer must apply to both protocols');
     assert.equal(calls.at(-1).body.DeviceProfile.Name, 'SenPlayer mpv');
   }
   useSettings.getState().reset();
-  console.log('PASS: separate Jellyfin/Emby identities, encoded metadata, stable device IDs, live cached/rebuilt APIs, persistence, build version, capabilities and restricted fixture discovery/login');
+  console.log('PASS: fixed API identity with preserved legacy settings, separate encoded device names, stable IDs, cached/rebuilt APIs and actual playback capabilities');
 
   const registered=await state.addServer(origin+'/registration','tester','test-password','Registration fixture');
   const blockedToken=registered.token;
@@ -282,15 +283,15 @@ const server = http.createServer(async (req,res) => {
   await state.updateServer(registered.id,{name:'Registration fixture',address:registered.address,username:'tester',password:'test-password',registerNewDevice:{clientName:' Supported Fixture Client '}});
   const repaired=useServers.getState().servers.find(s=>s.id===registered.id);
   assert.notEqual(repaired.deviceId,stableDevice);assert.notEqual(repaired.token,blockedToken);
-  assert.equal(repaired.clientName,'Supported Fixture Client');
+  assert.equal(repaired.clientName,registered.clientName,'Device registration must not overwrite legacy client-name data');
   assert.equal(storage.get('mjc:deviceId'),stableDevice,'Do not reset the global device ID');
   assert.equal(useServers.getState().servers.find(s=>s.id===savedEmby.id).token,otherToken,'Do not alter another connection');
-  assert.equal(await streamStatus(useServers.getState().getApi(registered.id)),206,'An explicitly registered supported client can read media');
+  assert.equal(await streamStatus(useServers.getState().getApi(registered.id)),206,'Explicitly replacing the blocked fixture device enables media access');
   assert.equal(new URL(useServers.getState().getApi(registered.id).hlsUrl('movie','source','session')).searchParams.get('DeviceId'),repaired.deviceId);
   useSettings.getState().reset();useServers.setState({apis:{}});
   const rebuilt=useServers.getState().getApi(registered.id);
-  assert.equal(rebuilt.clientIdentity().name,'Supported Fixture Client','The connection client name survives global defaults and API rebuild');
-  await rebuilt.getUserViews();assert.equal(headerField(calls.at(-1).headers.authorization,'DeviceId'),repaired.deviceId);
+  assert.equal(rebuilt.clientIdentity().name,'SenPlayer','Legacy connection overrides cannot replace the fixed API identity');
+  await rebuilt.getUserViews();assert.equal(headerField(calls.at(-1).headers['x-emby-authorization'],'DeviceId'),repaired.deviceId);
   const savedRegistration=JSON.parse(storage.get('mjc:servers')).state.servers.find(s=>s.id===registered.id);
   assert.equal(savedRegistration.deviceId,repaired.deviceId);assert.equal(savedRegistration.clientName,repaired.clientName);
   await assert.rejects(state.updateServer(registered.id,{name:'Failed repair',address:registered.address,username:'tester',password:'wrong-password',registerNewDevice:{clientName:'Different client'}}),ApiError);
@@ -311,10 +312,10 @@ const server = http.createServer(async (req,res) => {
   hookModule.exports.useServerReachability();const stopProbing=effect();
   await reached;stopProbing();
   const connectionProbe=calls.findLast(call=>call.path==='/registration/emby/System/Info/Public');
-  assert.equal(headerField(connectionProbe.headers.authorization,'Client'),repaired.clientName);
-  assert.equal(headerField(connectionProbe.headers.authorization,'DeviceId'),repaired.deviceId,'Online probing must share the actual connection identity');
-  console.log('PASS: online probing uses the connection client override and persistent device ID');
-  console.log('PASS: explicit per-server registration repairs media routing, preserves other connections/global ID, persists client/ID, survives API rebuild and rolls back failed login');
+  assert.equal(headerField(connectionProbe.headers['x-emby-authorization'],'Client'),'SenPlayer');
+  assert.equal(headerField(connectionProbe.headers['x-emby-authorization'],'DeviceId'),repaired.deviceId,'Online probing must share the actual connection identity');
+  console.log('PASS: online probing uses fixed SenPlayer identity and the persistent connection device ID');
+  console.log('PASS: explicit per-server device replacement preserves other connections/global ID and legacy data, survives API rebuild and rolls back failed login');
   useServers.setState({servers:[{id:'legacy',address:jf.address,token:'jellyfin-token',userId:'user',name:'Legacy'}],apis:{}});assert.equal(useServers.getState().getApi('legacy').protocol,'jellyfin');
   console.log('PASS: add/edit, custom names, saved protocol, API cache rebuild, legacy Jellyfin connections and atomic failed reauthentication');
 })().catch(error=>{console.error(error);process.exitCode=1}).finally(()=>{server.closeAllConnections();server.close()});

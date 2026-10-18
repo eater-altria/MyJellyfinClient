@@ -57,6 +57,8 @@ export interface ApiConnection {
   identity?: () => ClientIdentity;
   deviceId?: string;
   authorizationOnly?: boolean;
+  /** Legacy persisted flag; Jellyfin/Emby now always use the SenPlayer wire format. */
+  connectionMode?: 'standard' | 'senplayer';
 }
 
 export interface DetectedServer {
@@ -82,9 +84,13 @@ export interface ServerConnector {
   readonly name: string;
   readonly icon?: 'jellyfin' | 'emby';
   readonly clientNamePresets: readonly string[];
+  /** A connector may fix its wire identity while keeping the device name editable. */
+  readonly fixedClientIdentity?: Pick<ClientIdentity, 'name' | 'version'>;
   readonly supportsDeviceRegistration: boolean;
   readonly requiresNativePlaybackInfo: boolean;
   readonly discover: DiscoverServers;
+  /** Direct-login endpoint resolver; absent when discovery is required. */
+  loginAddress?(address: string): string;
   publicHeaders(identity: ClientIdentity): Record<string, string>;
   createApi(connection: ApiConnection): MediaServerApi;
 }

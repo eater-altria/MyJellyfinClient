@@ -66,9 +66,14 @@ fn validate(request: &HttpRequest) -> Result<(Url, Method, HeaderMap), String> {
     let mut headers = HeaderMap::new();
     for (name, value) in &request.headers {
         let name = name.to_ascii_lowercase();
-        if !matches!(name.as_str(), "authorization" | "x-emby-authorization" | "x-emby-token" | "accept" | "content-type")
+        if !matches!(name.as_str(), "authorization" | "x-emby-authorization" | "x-emby-token" | "accept" | "content-type" | "user-agent")
             || value.len() > 16384 {
             return Err("不支持的服务器请求头".into());
+        }
+        // Only the observed compatibility profile can override the shared UA.
+        // This does not expose arbitrary native request headers to the WebView.
+        if name == "user-agent" && value != "SenPlayer/6.2.2" {
+            return Err("不支持的服务器客户端标识".into());
         }
         if request.public_discovery && (name == "x-emby-token"
             || value.to_ascii_lowercase().contains("token=") || value.to_ascii_lowercase().contains("userid=")) {
@@ -233,6 +238,29 @@ mod tests {
         assert!(received.recv().unwrap().ends_with("{\"Username\":\"fixture\",\"Pw\":\"test-password\"}"));
         assert_eq!(tauri::async_runtime::block_on(execute(request(base))).unwrap().status, 204);
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn senplayer_profile_overrides_only_api_ua_and_preserves_login() {
+        let (base, received, worker) = fixture(vec![response("200 OK", "", "{}")]);
+        let mut login = request(format!("{base}/proxy/emby/Users/AuthenticateByName"));
+        login.method = "POST".into();
+        login.headers = HashMap::from([
+            ("User-Agent".into(), "SenPlayer/6.2.2".into()),
+            ("X-Emby-Authorization".into(), "MediaBrowser Client=\"SenPlayer\", Version=\"6.2.2\"".into()),
+        ]);
+        login.body = Some("{\"Username\":\"fixture\",\"Pw\":\"test-password\",\"Password\":\"test-password\"}".into());
+        assert!(tauri::async_runtime::block_on(execute(login)).is_ok());
+        let wire = received.recv().unwrap();
+        assert!(wire.starts_with("POST /proxy/emby/Users/AuthenticateByName "));
+        assert!(wire.contains("user-agent: SenPlayer/6.2.2\r\n"));
+        assert!(!wire.contains("\r\nauthorization:"));
+        assert!(wire.contains("x-emby-authorization: MediaBrowser "));
+        assert!(wire.ends_with("{\"Username\":\"fixture\",\"Pw\":\"test-password\",\"Password\":\"test-password\"}"));
+        worker.join().unwrap();
+        let mut invalid = request("https://example.test/Users/AuthenticateByName".into());
+        invalid.headers.insert("User-Agent".into(), "arbitrary-client".into());
+        assert!(validate(&invalid).is_err());
     }
 
     #[test]

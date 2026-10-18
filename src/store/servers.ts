@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { createServerApi, getServerConnector, availableServerConnectors, DEFAULT_SERVER_PROTOCOL,
-  normalizeAddress, type MediaServerApi, type AuthResult, type ServerProtocol } from '../api/mediaServer';
+  normalizeAddress, type MediaServerApi, type AuthResult, type PublicSystemInfo, type ServerProtocol } from '../api/mediaServer';
 import { detectServer } from '../api/detectServer';
 import { getClientIdentity } from './settings';
 import { normalizeClientIdentityText } from '../utils/clientIdentity';
@@ -18,6 +18,8 @@ export interface SavedServer {
   token?: string;
   deviceId?: string; // Explicit per-connection registration; legacy connections keep the global ID.
   clientName?: string; // Optional per-connection client name, chosen when registering a new device.
+  /** Historical field, ignored by current connection behavior. */
+  connectionMode?: 'standard' | 'senplayer';
   authorizationOnly?: boolean; // Public probe verified a proxy that permits only the standard auth header.
   remoteServerId?: string;
   jellyfinServerId?: string; // Legacy saved connection field.
@@ -35,8 +37,8 @@ interface ServersState {
   setReachability: (id: string, address: string, reachable: boolean) => void;
   /** live API instances keyed by saved server id */
   apis: Record<string, MediaServerApi>;
-  addServer: (address: string, username: string, password: string, name?: string, onDetected?: (protocol: ServerProtocol) => void, protocol?: ServerProtocol) => Promise<SavedServer>;
-  updateServer: (id: string, options: { name: string; address: string; username: string; password?: string; protocol?: ServerProtocol; onDetected?: (protocol: ServerProtocol) => void; registerNewDevice?: { clientName: string } }) => Promise<void>;
+  addServer: (address: string, username: string, password: string, name?: string, onDetected?: (protocol: ServerProtocol) => void, protocol?: ServerProtocol, connectionMode?: SavedServer['connectionMode']) => Promise<SavedServer>;
+  updateServer: (id: string, options: { name: string; address: string; username: string; password?: string; protocol?: ServerProtocol; connectionMode?: SavedServer['connectionMode']; onDetected?: (protocol: ServerProtocol) => void; registerNewDevice?: { clientName: string } }) => Promise<void>;
   removeServer: (id: string) => void;
   reorderServer: (id: string, targetId: string, placement: 'before' | 'after') => void;
   setActive: (id: string | null) => void;
@@ -53,6 +55,26 @@ function makeApi(s: SavedServer): MediaServerApi {
 
 const discoveryIdentities = () => Object.fromEntries(availableServerConnectors.map(({ id }) => [id, getClientIdentity(id)]));
 
+async function prepareConnection(address: string, protocol: ServerProtocol | undefined,
+  clientIdentities = discoveryIdentities()) {
+  const resolveAddress = protocol && getServerConnector(protocol).loginAddress;
+  if (!resolveAddress) return detectServer(address, { clientIdentities, protocol });
+  return { address: resolveAddress(address), protocol, info: undefined, authorizationOnly: undefined };
+}
+
+// SenPlayer logs in before reading metadata. A blocked public endpoint must not
+// discard a valid session; do not probe alternate hosts with account credentials.
+async function readConnectionInfo(api: MediaServerApi): Promise<PublicSystemInfo | undefined> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const info = await api.getPublicSystemInfo(controller.signal);
+    return info && typeof info.Id === 'string' && info.Id && typeof info.Version === 'string' && info.Version
+      ? info : undefined;
+  } catch { return undefined; }
+  finally { clearTimeout(timeout); }
+}
+
 export const useServers = create<ServersState>()(
   persist(
     (set, get) => ({
@@ -67,21 +89,24 @@ export const useServers = create<ServersState>()(
       },
 
       async addServer(address, username, password, name, onDetected, selectedProtocol) {
-        const { address: base, protocol, info, authorizationOnly } = await detectServer(address, { clientIdentities: discoveryIdentities(), protocol: selectedProtocol });
+        const detected = await prepareConnection(address, selectedProtocol);
+        const { address: base, protocol, authorizationOnly } = detected;
         onDetected?.(protocol);
         const api = createServerApi({ address: base, protocol, identity: () => getClientIdentity(protocol), authorizationOnly });
         const auth: AuthResult = await api.authenticate(username, password);
+        const info = detected.info ?? await readConnectionInfo(createServerApi({ address: base, protocol,
+          token: auth.token, userId: auth.userId, identity: () => getClientIdentity(protocol) }));
         const saved: SavedServer = {
           id: crypto.randomUUID(),
-          name: name?.trim() || info.ServerName || base,
+          name: name?.trim() || (typeof info?.ServerName === 'string' ? info.ServerName : '') || base,
           address: base,
           protocol,
           ...(authorizationOnly ? { authorizationOnly: true } : {}),
           userId: auth.userId,
           userName: auth.userName,
           token: auth.token,
-          remoteServerId: auth.serverId || info.Id,
-          version: info.Version,
+          remoteServerId: auth.serverId || info?.Id,
+          version: info?.Version,
           lastConnected: new Date().toISOString(),
         };
         const authed = makeApi(saved);
@@ -119,21 +144,29 @@ export const useServers = create<ServersState>()(
             identities[registrationProtocol] = { ...identities[registrationProtocol],
               name: normalizeClientIdentityText(options.registerNewDevice.clientName) || identities[registrationProtocol].name };
           }
-          const detected = await detectServer(address, { clientIdentities: identities, protocol: options.protocol });
+          const selected = options.protocol ?? original.protocol ?? DEFAULT_SERVER_PROTOCOL;
+          // Reauthenticate at an already verified route. Never rewrite a saved
+          // root/proxy route merely because new Emby logins default to /emby.
+          const sameEndpoint = address === original.address && selected === (original.protocol ?? DEFAULT_SERVER_PROTOCOL);
+          const detected = sameEndpoint && getServerConnector(selected).loginAddress
+            ? { address, protocol: selected, info: undefined, authorizationOnly: original.authorizationOnly }
+            : await prepareConnection(address, options.protocol, identities);
           if (options.registerNewDevice && !getServerConnector(detected.protocol).supportsDeviceRegistration) throw new ServerRegistrationError('此服务器连接器不支持重新登记登录设备');
           options.onDetected?.(detected.protocol);
           const registration = options.registerNewDevice ? {
             deviceId: crypto.randomUUID(),
-            clientName: normalizeClientIdentityText(options.registerNewDevice.clientName) || getClientIdentity(detected.protocol).name,
+            ...(getServerConnector(detected.protocol).fixedClientIdentity ? {} : {
+              clientName: normalizeClientIdentityText(options.registerNewDevice.clientName) || getClientIdentity(detected.protocol).name,
+            }),
           } : {};
           const loginServer = { ...saved, ...registration, address: detected.address, protocol: detected.protocol,
             authorizationOnly: detected.authorizationOnly };
           const api = makeApi({ ...loginServer, token: undefined, userId: undefined });
-          const info = detected.info;
           const auth = await api.authenticate(options.username, options.password ?? '');
+          const info = detected.info ?? await readConnectionInfo(makeApi({ ...loginServer, token: auth.token, userId: auth.userId }));
           saved = { ...loginServer,
             userId: auth.userId, userName: auth.userName, token: auth.token,
-            remoteServerId: auth.serverId || info.Id, version: info.Version,
+            remoteServerId: auth.serverId || info?.Id, version: info?.Version,
             lastConnected: new Date().toISOString(), lastError: undefined,
             libraryCount: undefined, itemCount: undefined };
         }

@@ -184,6 +184,7 @@ async function checkLibraryQueries() {
   };
   const Library = load('src/pages/Library.tsx', {
     '../api/mediaServer': media,
+    '../hooks/useMediaContextMenu': require('./source-bundle.cjs')('src/hooks/useMediaContextMenu.tsx'),
     react,
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
     'react-router-dom': { useParams: () => ({ serverId: 'server', libraryId: 'library' }), useNavigate: () => () => {}, useSearchParams: (()=>{const search=new URLSearchParams();return ()=>[search,()=>{}];})() },

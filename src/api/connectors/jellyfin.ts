@@ -1,6 +1,7 @@
-import { mediaBrowserAuthHeader } from './mediaBrowserAuth';
+import { getDeviceId } from './mediaBrowserAuth';
+import { SENPLAYER_CLIENT_IDENTITY, SENPLAYER_USER_AGENT, senPlayerAuthHeader, senPlayerClientIdentity } from './senPlayerCompatibility';
 import { MediaBrowserApi } from './MediaBrowserApi';
-import { normalizeLibraryFilters } from '../helpers';
+import { normalizeAddress, normalizeLibraryFilters } from '../helpers';
 import type { LibraryFilterOptions } from '../types';
 import type { ApiConnection, ServerConnector } from './types';
 import { discoverMediaBrowser, type MediaBrowserDiscoveryConfig } from './mediaBrowserDiscovery';
@@ -23,9 +24,11 @@ export class JellyfinConnectorApi extends MediaBrowserApi {
 export const jellyfinConnector: ServerConnector & MediaBrowserDiscoveryConfig & { readonly id: 'jellyfin' } = {
   id: 'jellyfin', name: 'Jellyfin', icon: 'jellyfin',
   clientNamePresets: ['Jellyfin Media Player', 'Jellyfin Web', 'Jellyfin Android', 'Infuse', 'SenPlayer'],
+  fixedClientIdentity: SENPLAYER_CLIENT_IDENTITY,
   supportsDeviceRegistration: false, requiresNativePlaybackInfo: false,
   discover: discoverMediaBrowser,
-  publicHeaders: identity => ({ 'X-Emby-Authorization': mediaBrowserAuthHeader(identity, undefined, 'MediaBrowser'), Accept: 'application/json' }),
+  loginAddress: normalizeAddress,
+  publicHeaders: identity => ({ 'X-Emby-Authorization': senPlayerAuthHeader(senPlayerClientIdentity(identity), getDeviceId()), Accept: '*/*', 'User-Agent': SENPLAYER_USER_AGENT }),
   apiAliases: [{ path: '/jellyfin', order: 2 }],
   preferApiAlias: false,
   matchPublicInfo(info, headers) {

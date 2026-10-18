@@ -5,9 +5,10 @@ import { ApiError, libraryItemTypes, matchesExternalSubtitleRule, normalizeAddre
 import type { AuthResult, BaseItem, ItemsResult, LibraryFilterOptions, MediaSource, Person, PlaybackInfoResult, PublicSystemInfo } from '../types';
 import type { MediaServerApi } from './types';
 import type { ServerProtocol } from './index';
-import { getDeviceId, mediaBrowserAuthHeader } from './mediaBrowserAuth';
+import { getDeviceId } from './mediaBrowserAuth';
 import { mediaServerRequest } from '../../platform/mediaServerRequest';
 import { readDanmakuResponse } from '../../player/danmaku';
+import { SENPLAYER_USER_AGENT, senPlayerAuthHeader, senPlayerClientIdentity } from './senPlayerCompatibility';
 
 const LIST_ITEM_FIELDS = 'Overview,PrimaryImageAspectRatio,DateCreated,MediaSources,MediaStreams,Chapters,ChildCount,RecursiveItemCount';
 
@@ -30,19 +31,20 @@ export abstract class MediaBrowserApi implements MediaServerApi {
 
   private headers(): Record<string, string> {
     const identity = this.clientIdentity();
-    const authorization = mediaBrowserAuthHeader(identity, this.token, this.authScheme, this.userId, this.deviceId());
+    const authorization = senPlayerAuthHeader(identity, this.deviceId(), this.token, this.userId);
     return {
-      Authorization: authorization,
+      ...(this.authScheme === 'MediaBrowser' || this.authorizationOnly ? { Authorization: authorization } : {}),
       ...(!this.authorizationOnly ? { 'X-Emby-Authorization': authorization,
         ...(this.token ? { 'X-Emby-Token': this.token } : {}) } : {}),
-      Accept: 'application/json',
+      'User-Agent': SENPLAYER_USER_AGENT,
+      Accept: '*/*',
       'Content-Type': 'application/json',
     };
   }
 
   clientIdentity(): ClientIdentity {
-    const identity = this.identity();
-    return resolveClientIdentity(identity);
+    const identity = resolveClientIdentity(this.identity());
+    return senPlayerClientIdentity(identity);
   }
 
   private deviceId(): string {
@@ -108,16 +110,18 @@ export abstract class MediaBrowserApi implements MediaServerApi {
     const res = await mediaServerRequest(this.url('/Users/AuthenticateByName'), {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ Username: username, Pw: password }),
+      body: JSON.stringify({ Username: username, Pw: password, Password: password }),
+      redirect: 'error',
     });
     if (!res.ok) throw new ApiError(res.status, await safeText(res));
     const data = await res.json();
-    if (!data?.User?.Id || !data.AccessToken) throw new Error('服务器登录响应无效');
+    if (typeof data?.User?.Id !== 'string' || !data.User.Id.trim()
+      || typeof data.AccessToken !== 'string' || !data.AccessToken.trim()) throw new Error('服务器登录响应无效');
     return {
       userId: data.User.Id,
-      userName: data.User.Name || username,
+      userName: typeof data.User.Name === 'string' && data.User.Name.trim() ? data.User.Name : username,
       token: data.AccessToken,
-      serverId: data.ServerId,
+      serverId: typeof data.ServerId === 'string' && data.ServerId.trim() ? data.ServerId : undefined,
     };
   }
 

@@ -67,6 +67,7 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
     return () => window.removeEventListener('keydown', handleKey);
   }, [loading, onClose, active]);
 
+  const fixedIdentity = getServerConnector(protocol).fixedClientIdentity;
   const supportsDeviceRegistration = getServerConnector(protocol).supportsDeviceRegistration;
   const canSubmit = address.trim() !== '' && username.trim() !== '' && !loading;
 
@@ -79,7 +80,7 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
     try {
       if (server) await updateServer(server.id, { name, address: address.trim(), username: username.trim(),
         password: registerNewDevice && supportsDeviceRegistration ? password : password || undefined, protocol, onDetected,
-        registerNewDevice: registerNewDevice && supportsDeviceRegistration ? { clientName } : undefined });
+        registerNewDevice: registerNewDevice && supportsDeviceRegistration ? { clientName: fixedIdentity?.name ?? clientName } : undefined });
       else await addServer(address.trim(), username.trim(), password, name, onDetected, protocol);
       onClose();
     } catch (e) {
@@ -192,17 +193,18 @@ export default function AddServerDialog({ onClose, server }: { onClose: () => vo
               <p className="mt-1.5 text-[12px] leading-relaxed text-text-secondary">
                 {registerNewDevice ? '需要重新登录。新设备仅用于此服务器，保存后保持固定。' : '适用于登录正常、播放被服务器限制的连接。'}
               </p>
-              {registerNewDevice && (
+              {registerNewDevice && !fixedIdentity && (
                 <div className="mt-3">
                   <label htmlFor={`${formId}-client`} className="mb-1.5 block text-[12px] font-medium text-text-secondary">此服务器的客户端名称</label>
                   <input id={`${formId}-client`} disabled={loading} className={inputCls} value={clientName} onChange={e => setClientName(e.target.value)} placeholder="服务器支持的客户端名称" />
                 </div>
               )}
-              {!registerNewDevice && server.clientName && <p className="mt-1 text-[12px] text-text-secondary">此连接使用客户端名称：{server.clientName}</p>}
+              {fixedIdentity && <p className="mt-1 text-[12px] text-text-secondary">固定使用 {fixedIdentity.name} 名称和版本，重新登记仅更换此连接的设备 ID。</p>}
+              {!registerNewDevice && !fixedIdentity && server.clientName && <p className="mt-1 text-[12px] text-text-secondary">此连接使用客户端名称：{server.clientName}</p>}
             </div>
           )}
 
-          <p className="px-1 text-[12px] leading-relaxed text-text-secondary" role="status">{loading ? connectionStatus : '按所选类型连接，不受服务器返回的产品名称影响。'}</p>
+          <p className="px-1 text-[12px] leading-relaxed text-text-secondary" role="status">{loading ? connectionStatus : fixedIdentity ? `使用 ${fixedIdentity.name} 连接方式，按所选服务器类型直接登录。` : '按所选类型连接，不受服务器返回的产品名称影响。'}</p>
 
           {error && (
             <div role="alert" className="rounded-2xl bg-red-500/10 px-4 py-3 text-[12px] text-red-600">{error}</div>

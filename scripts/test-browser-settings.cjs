@@ -65,6 +65,7 @@ const settingsStore = Object.assign(selector => selector(useSettings.getState())
 const settingsModule = { exports: {} };
 const settingsCode = esbuild.transformSync(fs.readFileSync('src/pages/Settings.tsx', 'utf8'), { loader: 'tsx', format: 'cjs', jsx: 'automatic' }).code;
 const imports = {
+  '../api/connectors/senPlayerCompatibility': require('./source-bundle.cjs')('src/api/connectors/senPlayerCompatibility.ts'),
   '../player/danmakuSettings': require('./source-bundle.cjs')('src/player/danmakuSettings.ts'),
   '../api/mediaServer': require('./source-bundle.cjs')('src/api/mediaServer.ts'),
   react, 'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
@@ -123,33 +124,29 @@ renderSettings();
 for (const [protocol, product] of [['jellyfin', 'Jellyfin'], ['emby', 'Emby']]) {
   const other = protocol === 'jellyfin' ? 'emby' : 'jellyfin';
   const otherIdentity = JSON.stringify(useSettings.getState().clientIdentities[other]);
-  const presetInput = () => find(renderSettings(), node => node.type === 'select' && node.props['aria-label'] === product + ' 客户端预设')[0];
+  useSettings.getState().setClientIdentity(protocol, 'name', 'Retained legacy custom name');
+  useSettings.getState().setClientIdentity(protocol, 'version', '9.8.7');
   const identityInput = label => find(renderSettings(), node => node.type === 'input' && node.props['aria-label'] === product + ' ' + label)[0];
-  assert.equal(presetInput().props.value, 'default');
-  const presetNames = find(presetInput(), node => node.type === 'option').map(node => node.props.value);
-  for (const preset of mod.exports.CLIENT_NAME_PRESETS[protocol]) {
-    assert(presetNames.includes(preset));
-    presetInput().props.onChange({ target: { value: preset } });
-    assert.equal(useSettings.getState().clientIdentities[protocol].name, preset);
-    assert.equal(presetInput().props.value, preset);
-  }
-  identityInput('客户端版本').props.onChange({ target: { value: '9.8.7' } });
-  identityInput('客户端版本').props.onKeyDown({ key: 'Enter', preventDefault() {} });
-  identityInput('设备名称').props.onChange({ target: { value: '我的电脑' } });
+  assert.equal(find(renderSettings(), node => node.type === 'select' && node.props['aria-label'] === product + ' 客户端预设').length, 0);
+  assert.equal(identityInput('客户端名称'), undefined);
+  assert.equal(identityInput('客户端版本'), undefined);
+  assert.match(JSON.stringify(renderSettings()), /SenPlayer/);
+  assert.match(JSON.stringify(renderSettings()), /6\.2\.2/);
+  identityInput('设备名称').props.onChange({target: {value: '我的电脑'}});
   identityInput('设备名称').props.onBlur();
-  presetInput().props.onChange({ target: { value: 'custom' } });
-  identityInput('客户端名称').props.onChange({ target: { value: '  Fixture Player\r\n  ' } });
-  identityInput('客户端名称').props.onBlur();
   useSettings.persist.rehydrate();
-  assert.deepEqual(useSettings.getState().clientIdentities[protocol], {name:'Fixture Player', version:'9.8.7', deviceName:'我的电脑'});
-  assert.equal(presetInput().props.value, 'custom');
-  assert.equal(JSON.stringify(useSettings.getState().clientIdentities[other]), otherIdentity, 'Editing one protocol must preserve the other identity');
-  presetInput().props.onChange({ target: { value: 'default' } });
-  assert.deepEqual(mod.exports.getClientIdentity(protocol), mod.exports.DEFAULT_CLIENT_IDENTITY);
-  assert.equal(useSettings.getState().autoHideControlsSeconds, 5, 'Restoring identity defaults must preserve other settings');
-  assert.equal(presetInput().props.value, 'default');
+  assert.deepEqual(useSettings.getState().clientIdentities[protocol], {name:'Retained legacy custom name', version:'9.8.7', deviceName:'我的电脑'},
+    'Editing the device must preserve legacy stored fields without exposing them as active API identity');
+  identityInput('设备名称').props.onChange({target: {value: '  Fixture Desktop\r\n  '}});
+  identityInput('设备名称').props.onKeyDown({key: 'Enter', preventDefault() {}});
+  assert.equal(useSettings.getState().clientIdentities[protocol].deviceName, 'Fixture Desktop');
+  identityInput('设备名称').props.onChange({target: {value: ''}});
+  identityInput('设备名称').props.onBlur();
+  assert.equal(mod.exports.getClientIdentity(protocol).deviceName, mod.exports.DEFAULT_CLIENT_IDENTITY.deviceName);
+  assert.equal(JSON.stringify(useSettings.getState().clientIdentities[other]), otherIdentity, 'Device edits are isolated by protocol');
+  assert.equal(useSettings.getState().autoHideControlsSeconds, 5, 'Identity UI preserves other settings');
 }
-console.log('PASS: separate Jellyfin/Emby dropdown presets, custom fields, blur/Enter, persistence and isolated defaults');
+console.log('PASS: fixed Jellyfin/Emby identity display, retained legacy fields, editable isolated device names, blur/Enter, persistence and defaults');
 
 const handlers=new Map(),timers=new Map();let serial=0;
 const target={addEventListener:(k,fn)=>handlers.set(k,fn),removeEventListener:k=>handlers.delete(k),

@@ -31,8 +31,9 @@ const esbuild = require('esbuild');
         assert(protocol === 'jellyfin' ? url.pathname === '/proxy/Items/Filters' : ['/proxy/Genres','/proxy/Tags','/proxy/Years'].includes(url.pathname));
         assert.equal(url.searchParams.get('UserId'), 'fixture-user'); assert.equal(url.searchParams.get('ParentId'), 'library & +?');
         assert.equal(url.searchParams.get('IncludeItemTypes'), 'Movie,Series'); assert.equal(init.signal, controller.signal);
-        assert.equal(init.headers.Authorization, init.headers['X-Emby-Authorization']);
-        assert(init.headers.Authorization.startsWith(protocol === 'emby' ? 'Emby ' : 'MediaBrowser '));
+        const headers = new Headers(init.headers);
+        assert.equal(headers.get('Authorization'), protocol === 'jellyfin' ? headers.get('X-Emby-Authorization') : null);
+        assert(headers.get('X-Emby-Authorization').startsWith('MediaBrowser '));
         const body = protocol === 'jellyfin' ? { Genres: ['动画'], Tags: ['标签 A'], Years: [2025] }
           : { Items: [{Name:url.pathname.endsWith('/Genres')?'动画':url.pathname.endsWith('/Tags')?'标签 A':'2025'}],TotalRecordCount:1 };
         return new Response(JSON.stringify(body));
@@ -45,7 +46,7 @@ const esbuild = require('esbuild');
     global.fetch=async(input,init)=>{
       const url=new URL(input),start=Number(url.searchParams.get('StartIndex')??0);requests.push(url);
       assert.equal(url.searchParams.get('ParentId'),'shows');assert.equal(url.searchParams.get('UserId'),'fixture-user');
-      assert.equal(url.searchParams.get('IncludeItemTypes'),'Series');assert(init.headers.Authorization.startsWith('Emby '));
+      assert.equal(url.searchParams.get('IncludeItemTypes'),'Series');assert(new Headers(init.headers).get('X-Emby-Authorization').startsWith('MediaBrowser '));
       assert.equal(url.searchParams.get('EnableImages'),'false');
       const data=url.pathname.endsWith('/Genres')?[{Name:'动画'},{Name:'剧情'}]:url.pathname.endsWith('/Years')?[{Name:'2025'},{Name:'2024'}]:manyTags;
       return new Response(JSON.stringify({Items:data.slice(start,start+100),TotalRecordCount:data.length}));

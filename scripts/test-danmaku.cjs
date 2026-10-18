@@ -22,7 +22,7 @@ async function main() {
   const api = new MediaServerApi('https://fixture.invalid/proxy/jellyfin', 'fixture-private-token', 'fixture-user');
   assert.equal(await api.getDanmakuXml('item/1'), '<i/>');
   assert.equal(requests[0].url, 'https://fixture.invalid/proxy/jellyfin/api/danmu/item%2F1/raw');
-  assert(requests[0].opts.headers.Authorization.includes('fixture-private-token'));
+  assert(new Headers(requests[0].opts.headers).get('Authorization').includes('fixture-private-token'));
   assert.equal(requests[0].opts.redirect, 'error');
   global.fetch = async () => new Response('', { status: 404 });
   assert.equal(await api.getDanmakuXml('missing'), null);

@@ -239,11 +239,11 @@ function setSearch(page, term) {
   assert.equal(checkbox().props.checked,false,'Device registration must be an explicit opt-in');
   assert.equal(find(registrationTree,node=>node.props?.id==='registration-dialog-client').length,0);
   checkbox().props.onChange({target:{checked:true}});registrationTree=renderDialog();
-  find(registrationTree,node=>node.props?.id==='registration-dialog-client')[0].props.onChange({target:{value:'Supported Fixture Client'}});
+  assert.equal(find(registrationTree,node=>node.props?.id==='registration-dialog-client').length,0,'SenPlayer registration does not expose a conflicting client-name field');
   find(registrationTree,node=>node.props?.id==='registration-dialog-password')[0].props.onChange({target:{value:'fixture-password'}});
   registrationTree=renderDialog();find(registrationTree,node=>node.type==='form')[0].props.onSubmit({preventDefault(){}});await flush();
   assert.equal(updates[0].id,'registration');
-  assert.deepEqual(updates[0].options.registerNewDevice,{clientName:'Supported Fixture Client'});
+  assert.deepEqual(updates[0].options.registerNewDevice,{clientName:'SenPlayer'});
   assert.equal(updates[0].options.password,'fixture-password');
-  console.log('PASS: registration is opt-in, exposes the connection client name and submits fresh login credentials');
+  console.log('PASS: registration is opt-in, uses the fixed SenPlayer identity and submits fresh login credentials');
 })().catch(error => { console.error(error); process.exitCode = 1; });

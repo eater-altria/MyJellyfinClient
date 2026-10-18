@@ -1,0 +1,85 @@
+{
+  "source": {
+    "kind": "local HTTP receiver observation, not decompilation",
+    "version": "6.2.2",
+    "build": "249",
+    "bundleId": "com.wuziqi.SenPlayer",
+    "executableSha256": "3734d24f2102612d3130d309c7fb06c3300561f21468b1102238154083c153d0"
+  },
+  "scope": "Synthetic loopback fixture only. Device name and ID redacted before storage. Requests selected from initial failed login and successful sessions; order grouped by protocol, not a full chronological trace.",
+  "requests": [
+    {
+      "method": "POST",
+      "url": "/proxy/emby/Users/AuthenticateByName",
+      "headers": {
+        "content-type": "application/json",
+        "x-emby-authorization": "MediaBrowser Client=\"SenPlayer\", Device=\"<redacted>\", DeviceId=\"<redacted>\", Version=\"6.2.2\"",
+        "accept": "*/*",
+        "user-agent": "SenPlayer/6.2.2"
+      },
+      "body": "{\"Pw\":\"fixture-password\",\"Password\":\"fixture-password\",\"Username\":\"fixture-user\"}"
+    },
+    {
+      "method": "GET",
+      "url": "/proxy/emby/System/Info/Public",
+      "headers": {
+        "content-type": "application/json",
+        "x-emby-authorization": "MediaBrowser UserId=\"11111111111111111111111111111111\", Client=\"SenPlayer\", Device=\"<redacted>\", DeviceId=\"<redacted>\", Version=\"6.2.2\", Token=\"fixture-token\"",
+        "x-emby-token": "fixture-token",
+        "accept": "*/*",
+        "user-agent": "SenPlayer/6.2.2"
+      },
+      "body": ""
+    },
+    {
+      "method": "GET",
+      "url": "/proxy/emby/Users/11111111111111111111111111111111/Views?IncludeExternalContent=false",
+      "headers": {
+        "content-type": "application/json",
+        "x-emby-authorization": "MediaBrowser UserId=\"11111111111111111111111111111111\", Client=\"SenPlayer\", Device=\"<redacted>\", DeviceId=\"<redacted>\", Version=\"6.2.2\", Token=\"fixture-token\"",
+        "x-emby-token": "fixture-token",
+        "accept": "*/*",
+        "user-agent": "SenPlayer/6.2.2"
+      },
+      "body": ""
+    },
+    {
+      "method": "POST",
+      "url": "/jelly-proxy/Users/AuthenticateByName",
+      "headers": {
+        "content-type": "application/json",
+        "x-emby-authorization": "MediaBrowser Client=\"SenPlayer\", Device=\"<redacted>\", DeviceId=\"<redacted>\", Version=\"6.2.2\"",
+        "accept": "*/*",
+        "user-agent": "SenPlayer/6.2.2",
+        "authorization": "MediaBrowser Client=\"SenPlayer\", Device=\"<redacted>\", DeviceId=\"<redacted>\", Version=\"6.2.2\""
+      },
+      "body": "{\"Username\":\"fixture-user\",\"Password\":\"fixture-password\",\"Pw\":\"fixture-password\"}"
+    },
+    {
+      "method": "GET",
+      "url": "/jelly-proxy/System/Info/Public",
+      "headers": {
+        "content-type": "application/json",
+        "x-emby-authorization": "MediaBrowser UserId=\"11111111111111111111111111111111\", Client=\"SenPlayer\", Device=\"<redacted>\", DeviceId=\"<redacted>\", Version=\"6.2.2\", Token=\"fixture-token\"",
+        "x-emby-token": "fixture-token",
+        "accept": "*/*",
+        "user-agent": "SenPlayer/6.2.2",
+        "authorization": "MediaBrowser UserId=\"11111111111111111111111111111111\", Client=\"SenPlayer\", Device=\"<redacted>\", DeviceId=\"<redacted>\", Version=\"6.2.2\", Token=\"fixture-token\""
+      },
+      "body": ""
+    },
+    {
+      "method": "GET",
+      "url": "/jelly-proxy/Users/11111111111111111111111111111111/Views?IncludeExternalContent=false",
+      "headers": {
+        "content-type": "application/json",
+        "x-emby-authorization": "MediaBrowser UserId=\"11111111111111111111111111111111\", Client=\"SenPlayer\", Device=\"<redacted>\", DeviceId=\"<redacted>\", Version=\"6.2.2\", Token=\"fixture-token\"",
+        "x-emby-token": "fixture-token",
+        "accept": "*/*",
+        "user-agent": "SenPlayer/6.2.2",
+        "authorization": "MediaBrowser UserId=\"11111111111111111111111111111111\", Client=\"SenPlayer\", Device=\"<redacted>\", DeviceId=\"<redacted>\", Version=\"6.2.2\", Token=\"fixture-token\""
+      },
+      "body": ""
+    }
+  ]
+}
